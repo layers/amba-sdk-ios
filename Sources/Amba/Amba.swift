@@ -66,6 +66,10 @@ public final class AmbaClient {
     public let content: Content
     public let deepLinks: DeepLinks
     public let onboarding: Onboarding
+    // Wire-verify primitive — added in v1.0.1. Held last in this list so
+    // the diff against v1.0.0 is exactly one line plus the namespace
+    // class below.
+    public let diagnosticsClient: DiagnosticsClient
 
     /// Production initializer — builds a real `AmbaCoreFfi` from config.
     /// Throws `AmbaSwiftError.invalidConfig` if `apiKey` is empty.
@@ -124,6 +128,7 @@ public final class AmbaClient {
         self.content = Content(core: core)
         self.deepLinks = DeepLinks(core: core)
         self.onboarding = Onboarding(core: core)
+        self.diagnosticsClient = DiagnosticsClient(core: core)
     }
 
     // ── Identity / debug pass-through ─────────────────────────────────
@@ -411,6 +416,45 @@ public final class AmbaClient {
         init(core: AmbaCoreFfiProtocol) { self.core = core }
         public func fetch() async throws -> [FlagAssignmentFfi] {
             try await core.flagsFetch()
+        }
+    }
+
+    /// Instance counterpart to the `Amba.diagnostics.ping()` static
+    /// facade. Holds the UniFFI core reference and decodes the JSON
+    /// envelope `diagnostics_ping` returns from the Rust side into a
+    /// typed `PingResult`. The static facade (`public actor Diagnostics`
+    /// below) forwards to this same code path through the singleton
+    /// `AmbaClient`.
+    public final class DiagnosticsClient {
+        private let core: AmbaCoreFfiProtocol
+        init(core: AmbaCoreFfiProtocol) { self.core = core }
+
+        /// Issue a wire-verify ping. Returns the server-echoed envelope
+        /// so the caller can compare `serverProjectId` / `keyFingerprint`
+        /// against what they configured. Logs success/failure via
+        /// `os.Logger` (subsystem `"com.layers.amba"`, category `"sdk"`)
+        /// on platforms that support it; falls back to `print()` on
+        /// older OSes / Linux.
+        ///
+        /// The log path branches on `PingResult.ok`: a 200 envelope
+        /// with `ok=false` (e.g. `DIAGNOSTICS_PROJECT_NOT_FOUND`) is
+        /// the customer-debuggable failure mode the primitive was
+        /// designed around — logging it as `success` would defeat
+        /// the entire point of having a wire-verify primitive.
+        public func ping() async throws -> PingResult {
+            do {
+                let json = try await core.diagnosticsPing()
+                let result = try Amba.decodeJSON(PingResult.self, from: json)
+                if result.ok {
+                    AmbaDiagnosticsLog.success(result)
+                } else {
+                    AmbaDiagnosticsLog.serverFailure(result)
+                }
+                return result
+            } catch {
+                AmbaDiagnosticsLog.failure(error)
+                throw error
+            }
         }
     }
 
@@ -995,6 +1039,14 @@ public enum Amba {
         lock.unlock()
         guard let c = client else { throw AmbaSwiftError.notConfigured }
         return c
+    }
+
+    /// Module-internal accessor exposed for sibling namespace files
+    /// (e.g. `Diagnostics.swift`) that need to route through the
+    /// singleton without making `requireClient` part of the public
+    /// surface. Same semantics as the private accessor above.
+    internal static func _internalRequireClient() throws -> AmbaClient {
+        try requireClient()
     }
 
     public static var anonymousId: String? { (try? requireClient())?.anonymousId }
@@ -1632,7 +1684,7 @@ extension JSONEncoder {
     }()
 }
 
-public let SDK_VERSION = "0.1.0"
+public let SDK_VERSION = "1.0.1"
 
 // MARK: - Gamification types
 

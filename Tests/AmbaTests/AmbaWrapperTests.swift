@@ -642,6 +642,23 @@ final class MockAmbaCore: AmbaCoreFfiProtocol, @unchecked Sendable {
         return nextDeepLinksCreateJson
     }
 
+    // ── diagnostics ──
+    //
+    // `diagnosticsPing` returns a JSON-encoded `PingResult` envelope.
+    // Test cases override `nextDiagnosticsPingJson` to drive both the
+    // happy path (`ok:true`) and the server-side-failure path
+    // (`ok:false, error:"..."`); the auth-failure path is exercised by
+    // setting `diagnosticsPingError` so the protocol method throws,
+    // matching how the Rust core surfaces 401 as `AmbaError::Unauthorized`.
+    var diagnosticsPingCount = 0
+    var nextDiagnosticsPingJson: String = #"{"ok":true,"server_project_id":"proj_abc","environment":"sandbox","key_fingerprint":"4f8a","latency_ms":73,"error":null}"#
+    var diagnosticsPingError: Error?
+    func diagnosticsPing() async throws -> String {
+        diagnosticsPingCount += 1
+        if let e = diagnosticsPingError { throw e }
+        return nextDiagnosticsPingJson
+    }
+
     var onboardingGetStatusCount = 0
     var onboardingNextStepCalls: [String] = []
     var onboardingSkipStepCount = 0

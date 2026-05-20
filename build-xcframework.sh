@@ -56,8 +56,11 @@ rustup target add \
 # the UniFFI facade module is always compiled into the host binary
 # used for introspection.
 echo "==> building core for host (uniffi-bindgen + introspection target)"
-(cd "$CORE_DIR" && cargo build --release --features uniffi-surface)
-(cd "$CORE_DIR" && cargo build --features uniffi-surface)
+# `bindgen-tool` enables the uniffi `cli` feature (clap), which is required
+# for the `uniffi-bindgen` binary target. Kept gated so iOS/Android cargo
+# builds don't pull clap into the published staticlibs.
+(cd "$CORE_DIR" && cargo build --release --features uniffi-surface,bindgen-tool)
+(cd "$CORE_DIR" && cargo build --features uniffi-surface,bindgen-tool)
 
 # Step 2 — generate Swift bindings. uniffi-bindgen emits
 # AmbaCoreFFI.h + AmbaCoreFFI.modulemap (the FFI surface) plus
@@ -69,7 +72,7 @@ echo "==> building core for host (uniffi-bindgen + introspection target)"
 # and any "skip if present" optimization is permanently false (the
 # files are always present, so it would never fire).
 echo "==> generating Swift FFI bindings (AmbaCoreFFI.h + modulemap + AmbaCore.swift)"
-(cd "$CORE_DIR" && cargo run --bin uniffi-bindgen --features uniffi-surface -- generate \
+(cd "$CORE_DIR" && cargo run --bin uniffi-bindgen --features uniffi-surface,bindgen-tool -- generate \
     --library "$TARGET_DIR/release/libamba_core.dylib" \
     --language swift \
     --out-dir "$GENERATED_DIR")

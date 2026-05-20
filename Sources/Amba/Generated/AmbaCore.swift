@@ -566,6 +566,8 @@ public protocol AmbaCoreFfiProtocol: AnyObject {
 
     func deepLinksGet(shortCode: String) async throws -> String
 
+    func diagnosticsPing() async throws -> String
+
     func entitlementsHas(name: String) async -> Bool
 
     func entitlementsList() async throws -> [UserEntitlementFfi]
@@ -1179,6 +1181,22 @@ open class AmbaCoreFfi:
                     uniffi_amba_core_fn_method_ambacoreffi_deep_links_get(
                         self.uniffiClonePointer(),
                         FfiConverterString.lower(shortCode)
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
+                completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
+                freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
+                liftFunc: FfiConverterString.lift,
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
+    open func diagnosticsPing() async throws -> String {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_diagnostics_ping(
+                        self.uniffiClonePointer()
                     )
                 },
                 pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
@@ -3733,6 +3751,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_amba_core_checksum_method_ambacoreffi_deep_links_get() != 56169 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_amba_core_checksum_method_ambacoreffi_diagnostics_ping() != 36882 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_amba_core_checksum_method_ambacoreffi_entitlements_has() != 15309 {

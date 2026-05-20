@@ -391,6 +391,11 @@ uint64_t uniffi_amba_core_fn_method_ambacoreffi_deep_links_create(void*_Nonnull 
 uint64_t uniffi_amba_core_fn_method_ambacoreffi_deep_links_get(void*_Nonnull ptr, RustBuffer short_code
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AMBA_CORE_FN_METHOD_AMBACOREFFI_DIAGNOSTICS_PING
+#define UNIFFI_FFIDEF_UNIFFI_AMBA_CORE_FN_METHOD_AMBACOREFFI_DIAGNOSTICS_PING
+uint64_t uniffi_amba_core_fn_method_ambacoreffi_diagnostics_ping(void*_Nonnull ptr
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AMBA_CORE_FN_METHOD_AMBACOREFFI_ENTITLEMENTS_HAS
 #define UNIFFI_FFIDEF_UNIFFI_AMBA_CORE_FN_METHOD_AMBACOREFFI_ENTITLEMENTS_HAS
 uint64_t uniffi_amba_core_fn_method_ambacoreffi_entitlements_has(void*_Nonnull ptr, RustBuffer name
@@ -1168,6 +1173,12 @@ uint16_t uniffi_amba_core_checksum_method_ambacoreffi_deep_links_create(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_AMBA_CORE_CHECKSUM_METHOD_AMBACOREFFI_DEEP_LINKS_GET
 #define UNIFFI_FFIDEF_UNIFFI_AMBA_CORE_CHECKSUM_METHOD_AMBACOREFFI_DEEP_LINKS_GET
 uint16_t uniffi_amba_core_checksum_method_ambacoreffi_deep_links_get(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AMBA_CORE_CHECKSUM_METHOD_AMBACOREFFI_DIAGNOSTICS_PING
+#define UNIFFI_FFIDEF_UNIFFI_AMBA_CORE_CHECKSUM_METHOD_AMBACOREFFI_DIAGNOSTICS_PING
+uint16_t uniffi_amba_core_checksum_method_ambacoreffi_diagnostics_ping(void
     
 );
 #endif
