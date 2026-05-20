@@ -11,10 +11,11 @@ import PackageDescription
 // xcframework is committed to the mirror repo (the simulator slice
 // exceeds GitHub's 100 MB per-file hard limit).
 //
-// Placeholders substituted by the workflow:
-//   https://github.com/layers/amba-sdk-ios/releases/download/1.0.0/AmbaCoreFFI.xcframework.zip       Release asset download URL (HTTPS, public).
-//   42c67819873f10d14b394a7751a7b6fc456317636d224bf4624e669ba5f4eca6  SHA-256 of the zip, as computed by `swift package
-//                 compute-checksum` (lowercase hex, no prefix).
+// The workflow substitutes the asset URL into the `url:` argument and
+// the lowercase-hex SHA-256 (from `swift package compute-checksum`)
+// into the `checksum:` argument below. Placeholders intentionally only
+// appear in those two argument positions so a stray sed-substitution
+// can't accidentally rewrite this comment block.
 
 let package = Package(
     name: "Amba",
@@ -31,7 +32,7 @@ let package = Package(
         .binaryTarget(
             name: "AmbaCoreFFI",
             url: "https://github.com/layers/amba-sdk-ios/releases/download/1.0.0/AmbaCoreFFI.xcframework.zip",
-            checksum: "42c67819873f10d14b394a7751a7b6fc456317636d224bf4624e669ba5f4eca6"
+            checksum: "472f2b212753bc392df069956ba4c04b6c5ba48cd03e2ba8c78442e9e93a96ea"
         ),
         .target(
             name: "Amba",
