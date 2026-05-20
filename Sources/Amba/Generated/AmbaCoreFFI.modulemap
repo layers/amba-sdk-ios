@@ -1,0 +1,4 @@
+module AmbaCoreFFI {
+    header "AmbaCoreFFI.h"
+    export *
+}
