@@ -508,6 +508,24 @@ private struct FfiConverterString: FfiConverter {
     }
 }
 
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+private struct FfiConverterData: FfiConverterRustBuffer {
+    typealias SwiftType = Data
+
+    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Data {
+        let len: Int32 = try readInt(&buf)
+        return try Data(readBytes(&buf, count: Int(len)))
+    }
+
+    static func write(_ value: Data, into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        writeBytes(&buf, value)
+    }
+}
+
 public protocol AmbaCoreFfiProtocol: AnyObject {
     func achievementsGetAll() async throws -> String
 
@@ -519,6 +537,8 @@ public protocol AmbaCoreFfiProtocol: AnyObject {
 
     func appUserId() -> String?
 
+    func catalogGet(itemId: String) async throws -> String
+
     func catalogList() async throws -> String
 
     func challengesClaim(id: String) async throws -> String
@@ -529,9 +549,22 @@ public protocol AmbaCoreFfiProtocol: AnyObject {
 
     func challengesGetProgress(id: String) async throws -> String
 
+    /**
+     * `filter_json` is `null` for an unfiltered count or a JSON-encoded
+     * [`Filter`] tree. Returns `{"data": {"count": N}}` JSON.
+     */
+    func collectionsCount(collection: String, filterJson: String?) async throws -> String
+
     func collectionsDelete(collection: String, id: String) async throws -> String
 
     func collectionsFind(collection: String, optionsJson: String) async throws -> String
+
+    /**
+     * `options_json` matches [`NearestOptions`]:
+     * `{vector_field, query_vector, k, filter?}`. Returns
+     * `{"data": [row, …]}` JSON.
+     */
+    func collectionsFindNearest(collection: String, optionsJson: String) async throws -> String
 
     func collectionsFindOne(collection: String, id: String) async throws -> String
 
@@ -562,6 +595,8 @@ public protocol AmbaCoreFfiProtocol: AnyObject {
 
     func currenciesGetTransactions(currencyKey: String) async throws -> String
 
+    func currentIdentifiers() async throws -> [LinkedIdentifierFfi]
+
     func deepLinksCreate(paramsJson: String) async throws -> String
 
     func deepLinksGet(shortCode: String) async throws -> String
@@ -576,13 +611,32 @@ public protocol AmbaCoreFfiProtocol: AnyObject {
 
     func flagsFetch() async throws -> [FlagAssignmentFfi]
 
+    /**
+     * Single-flag lookup (SDK 4.0). Returns `None` for unknown /
+     * disabled keys; bubbles all other errors. Native wrappers can
+     * surface `null` to Swift / Kotlin callers without a try/catch.
+     */
+    func flagsGet(key: String) async throws -> FlagAssignmentFfi?
+
+    func friendsAcceptRequest(friendshipId: String) async throws -> String
+
     func friendsBlockUser(userId: String) async throws -> String
+
+    func friendsDeclineRequest(friendshipId: String) async throws
 
     func friendsGetFriends() async throws -> String
 
     func friendsGetList() async throws -> String
 
     func friendsRemoveBlock(friendshipId: String) async throws
+
+    /**
+     * Unfriend by the other user's id (SDK 4.0). Wraps
+     * `DELETE /v1/client/friends/by-user/{userId}`.
+     */
+    func friendsRemoveFriend(userId: String) async throws
+
+    func friendsSendRequest(userId: String) async throws -> String
 
     func friendsUnblockUser(userId: String) async throws
 
@@ -618,6 +672,16 @@ public protocol AmbaCoreFfiProtocol: AnyObject {
 
     func leaderboardsGetMyRank(key: String) async throws -> String
 
+    func leaguesCohort() async throws -> String
+
+    func leaguesMe() async throws -> String
+
+    func linkAccount(provider: String, credential: String) async throws -> AuthResultFfi
+
+    func linkEmailOtp(email: String, code: String) async throws -> UserFfi
+
+    func linkSmsOtp(phone: String, code: String) async throws -> UserFfi
+
     func me() async throws -> UserFfi
 
     /**
@@ -627,6 +691,15 @@ public protocol AmbaCoreFfiProtocol: AnyObject {
     func messagingCreateConversation(requestJson: String) async throws -> String
 
     func messagingGetConversations() async throws -> String
+
+    /**
+     * `GET /v1/client/messaging/conversations/:id/messages/:message_id`
+     * — implemented in core via paginated `list_messages` with an id
+     * filter (the server doesn't ship a dedicated route yet). Returns
+     * JSON `"null"` literal when the message isn't found so wrappers
+     * can branch on the nullable result without an exception path.
+     */
+    func messagingGetMessage(conversationId: String, messageId: String) async throws -> String
 
     /**
      * `GET /v1/client/messaging/conversations/:id/messages`.
@@ -678,6 +751,12 @@ public protocol AmbaCoreFfiProtocol: AnyObject {
 
     func refreshSession() async throws -> AuthResultFfi
 
+    func requestEmailOtp(email: String) async throws
+
+    func requestMagicLink(email: String) async throws
+
+    func requestSmsOtp(phone: String) async throws
+
     func reviewsCreate(paramsJson: String) async throws -> String
 
     func reviewsDelete(id: String) async throws
@@ -689,6 +768,10 @@ public protocol AmbaCoreFfiProtocol: AnyObject {
     func rolesGetMyRoles() async throws -> String
 
     func rolesHasPermission(permission: String) async throws -> Bool
+
+    func sessionsList() async throws -> String
+
+    func sessionsRevoke(sessionId: String) async throws
 
     func setDebug(enabled: Bool)
 
@@ -704,6 +787,22 @@ public protocol AmbaCoreFfiProtocol: AnyObject {
 
     func storageCommit(uploadId: String, assetId: String) async throws -> MediaAssetFfi
 
+    func storageDelete(assetId: String) async throws
+
+    /**
+     * Returns the raw bytes for an asset. UniFFI maps `Vec<u8>` to
+     * `Data` on Swift and `ByteArray` on Kotlin; wrappers can pipe
+     * these into platform-native byte handlers without re-encoding.
+     */
+    func storageDownload(assetId: String) async throws -> Data
+
+    /**
+     * `prefix` is forwarded to the server as a `?prefix=` query
+     * parameter (the server currently ignores it; surface stays
+     * forward-compatible per the SDK 4.0 contract).
+     */
+    func storageList(prefix: String?) async throws -> String
+
     func storagePresign(bucket: String, filename: String, mimeType: String, sizeBytes: UInt64, retentionDays: UInt32?) async throws -> PresignDataFfi
 
     func storesGetPurchaseOptions(storeKey: String) async throws -> String
@@ -716,7 +815,38 @@ public protocol AmbaCoreFfiProtocol: AnyObject {
 
     func streaksQualify(streakKey: String) async throws -> String
 
-    func track(event: String, propertiesJson: String?) async throws
+    /**
+     * `since_json` is a JSON object `{entity_type, checkpoint_token?}`.
+     * `entity_type` is required by the server; supplying an empty
+     * value yields a Validation error from the SDK.
+     */
+    func syncPullChanges(sinceJson: String) async throws -> String
+
+    /**
+     * `changes_json` is a JSON array of [`crate::sync::SyncChange`] —
+     * each `{entity_type, entity_id, action, data, client_timestamp}`.
+     */
+    func syncPushChanges(changesJson: String) async throws -> String
+
+    func track(event: String, propertiesJson: String?, telemetry: Bool?) async throws
+
+    func unlinkApple() async throws -> UserFfi
+
+    func unlinkEmailOtp() async throws -> UserFfi
+
+    func unlinkGoogle() async throws -> UserFfi
+
+    func unlinkSmsOtp() async throws -> UserFfi
+
+    func usersGet(userId: String?) async throws -> UserFfi
+
+    func usersUpdate(userId: String?, patchJson: String) async throws -> UserFfi
+
+    func verifyEmailOtp(email: String, code: String) async throws -> AuthResultFfi
+
+    func verifyMagicLink(token: String) async throws -> AuthResultFfi
+
+    func verifySmsOtp(phone: String, code: String) async throws -> AuthResultFfi
 
     func xpClaim(grantKey: String) async throws -> String
 
@@ -848,6 +978,23 @@ open class AmbaCoreFfi:
         })
     }
 
+    open func catalogGet(itemId: String) async throws -> String {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_catalog_get(
+                        self.uniffiClonePointer(),
+                        FfiConverterString.lower(itemId)
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
+                completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
+                freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
+                liftFunc: FfiConverterString.lift,
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
     open func catalogList() async throws -> String {
         return
             try await uniffiRustCallAsync(
@@ -931,6 +1078,27 @@ open class AmbaCoreFfi:
             )
     }
 
+    /**
+     * `filter_json` is `null` for an unfiltered count or a JSON-encoded
+     * [`Filter`] tree. Returns `{"data": {"count": N}}` JSON.
+     */
+    open func collectionsCount(collection: String, filterJson: String?) async throws -> String {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_collections_count(
+                        self.uniffiClonePointer(),
+                        FfiConverterString.lower(collection), FfiConverterOptionString.lower(filterJson)
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
+                completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
+                freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
+                liftFunc: FfiConverterString.lift,
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
     open func collectionsDelete(collection: String, id: String) async throws -> String {
         return
             try await uniffiRustCallAsync(
@@ -953,6 +1121,28 @@ open class AmbaCoreFfi:
             try await uniffiRustCallAsync(
                 rustFutureFunc: {
                     uniffi_amba_core_fn_method_ambacoreffi_collections_find(
+                        self.uniffiClonePointer(),
+                        FfiConverterString.lower(collection), FfiConverterString.lower(optionsJson)
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
+                completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
+                freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
+                liftFunc: FfiConverterString.lift,
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
+    /**
+     * `options_json` matches [`NearestOptions`]:
+     * `{vector_field, query_vector, k, filter?}`. Returns
+     * `{"data": [row, …]}` JSON.
+     */
+    open func collectionsFindNearest(collection: String, optionsJson: String) async throws -> String {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_collections_find_nearest(
                         self.uniffiClonePointer(),
                         FfiConverterString.lower(collection), FfiConverterString.lower(optionsJson)
                     )
@@ -1157,6 +1347,22 @@ open class AmbaCoreFfi:
             )
     }
 
+    open func currentIdentifiers() async throws -> [LinkedIdentifierFfi] {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_current_identifiers(
+                        self.uniffiClonePointer()
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
+                completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
+                freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
+                liftFunc: FfiConverterSequenceTypeLinkedIdentifierFfi.lift,
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
     open func deepLinksCreate(paramsJson: String) async throws -> String {
         return
             try await uniffiRustCallAsync(
@@ -1273,6 +1479,45 @@ open class AmbaCoreFfi:
             )
     }
 
+    /**
+     * Single-flag lookup (SDK 4.0). Returns `None` for unknown /
+     * disabled keys; bubbles all other errors. Native wrappers can
+     * surface `null` to Swift / Kotlin callers without a try/catch.
+     */
+    open func flagsGet(key: String) async throws -> FlagAssignmentFfi? {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_flags_get(
+                        self.uniffiClonePointer(),
+                        FfiConverterString.lower(key)
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
+                completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
+                freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
+                liftFunc: FfiConverterOptionTypeFlagAssignmentFfi.lift,
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
+    open func friendsAcceptRequest(friendshipId: String) async throws -> String {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_friends_accept_request(
+                        self.uniffiClonePointer(),
+                        FfiConverterString.lower(friendshipId)
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
+                completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
+                freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
+                liftFunc: FfiConverterString.lift,
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
     open func friendsBlockUser(userId: String) async throws -> String {
         return
             try await uniffiRustCallAsync(
@@ -1286,6 +1531,23 @@ open class AmbaCoreFfi:
                 completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
                 freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
                 liftFunc: FfiConverterString.lift,
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
+    open func friendsDeclineRequest(friendshipId: String) async throws {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_friends_decline_request(
+                        self.uniffiClonePointer(),
+                        FfiConverterString.lower(friendshipId)
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_void,
+                completeFunc: ffi_amba_core_rust_future_complete_void,
+                freeFunc: ffi_amba_core_rust_future_free_void,
+                liftFunc: { $0 },
                 errorHandler: FfiConverterTypeAmbaCoreError.lift
             )
     }
@@ -1335,6 +1597,44 @@ open class AmbaCoreFfi:
                 completeFunc: ffi_amba_core_rust_future_complete_void,
                 freeFunc: ffi_amba_core_rust_future_free_void,
                 liftFunc: { $0 },
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
+    /**
+     * Unfriend by the other user's id (SDK 4.0). Wraps
+     * `DELETE /v1/client/friends/by-user/{userId}`.
+     */
+    open func friendsRemoveFriend(userId: String) async throws {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_friends_remove_friend(
+                        self.uniffiClonePointer(),
+                        FfiConverterString.lower(userId)
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_void,
+                completeFunc: ffi_amba_core_rust_future_complete_void,
+                freeFunc: ffi_amba_core_rust_future_free_void,
+                liftFunc: { $0 },
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
+    open func friendsSendRequest(userId: String) async throws -> String {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_friends_send_request(
+                        self.uniffiClonePointer(),
+                        FfiConverterString.lower(userId)
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
+                completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
+                freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
+                liftFunc: FfiConverterString.lift,
                 errorHandler: FfiConverterTypeAmbaCoreError.lift
             )
     }
@@ -1616,6 +1916,89 @@ open class AmbaCoreFfi:
             )
     }
 
+    open func leaguesCohort() async throws -> String {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_leagues_cohort(
+                        self.uniffiClonePointer()
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
+                completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
+                freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
+                liftFunc: FfiConverterString.lift,
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
+    open func leaguesMe() async throws -> String {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_leagues_me(
+                        self.uniffiClonePointer()
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
+                completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
+                freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
+                liftFunc: FfiConverterString.lift,
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
+    open func linkAccount(provider: String, credential: String) async throws -> AuthResultFfi {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_link_account(
+                        self.uniffiClonePointer(),
+                        FfiConverterString.lower(provider), FfiConverterString.lower(credential)
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
+                completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
+                freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
+                liftFunc: FfiConverterTypeAuthResultFfi.lift,
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
+    open func linkEmailOtp(email: String, code: String) async throws -> UserFfi {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_link_email_otp(
+                        self.uniffiClonePointer(),
+                        FfiConverterString.lower(email), FfiConverterString.lower(code)
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
+                completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
+                freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
+                liftFunc: FfiConverterTypeUserFfi.lift,
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
+    open func linkSmsOtp(phone: String, code: String) async throws -> UserFfi {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_link_sms_otp(
+                        self.uniffiClonePointer(),
+                        FfiConverterString.lower(phone), FfiConverterString.lower(code)
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
+                completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
+                freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
+                liftFunc: FfiConverterTypeUserFfi.lift,
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
     open func me() async throws -> UserFfi {
         return
             try await uniffiRustCallAsync(
@@ -1659,6 +2042,30 @@ open class AmbaCoreFfi:
                 rustFutureFunc: {
                     uniffi_amba_core_fn_method_ambacoreffi_messaging_get_conversations(
                         self.uniffiClonePointer()
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
+                completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
+                freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
+                liftFunc: FfiConverterString.lift,
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
+    /**
+     * `GET /v1/client/messaging/conversations/:id/messages/:message_id`
+     * — implemented in core via paginated `list_messages` with an id
+     * filter (the server doesn't ship a dedicated route yet). Returns
+     * JSON `"null"` literal when the message isn't found so wrappers
+     * can branch on the nullable result without an exception path.
+     */
+    open func messagingGetMessage(conversationId: String, messageId: String) async throws -> String {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_messaging_get_message(
+                        self.uniffiClonePointer(),
+                        FfiConverterString.lower(conversationId), FfiConverterString.lower(messageId)
                     )
                 },
                 pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
@@ -1998,6 +2405,57 @@ open class AmbaCoreFfi:
             )
     }
 
+    open func requestEmailOtp(email: String) async throws {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_request_email_otp(
+                        self.uniffiClonePointer(),
+                        FfiConverterString.lower(email)
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_void,
+                completeFunc: ffi_amba_core_rust_future_complete_void,
+                freeFunc: ffi_amba_core_rust_future_free_void,
+                liftFunc: { $0 },
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
+    open func requestMagicLink(email: String) async throws {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_request_magic_link(
+                        self.uniffiClonePointer(),
+                        FfiConverterString.lower(email)
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_void,
+                completeFunc: ffi_amba_core_rust_future_complete_void,
+                freeFunc: ffi_amba_core_rust_future_free_void,
+                liftFunc: { $0 },
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
+    open func requestSmsOtp(phone: String) async throws {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_request_sms_otp(
+                        self.uniffiClonePointer(),
+                        FfiConverterString.lower(phone)
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_void,
+                completeFunc: ffi_amba_core_rust_future_complete_void,
+                freeFunc: ffi_amba_core_rust_future_free_void,
+                liftFunc: { $0 },
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
     open func reviewsCreate(paramsJson: String) async throws -> String {
         return
             try await uniffiRustCallAsync(
@@ -2095,6 +2553,39 @@ open class AmbaCoreFfi:
                 completeFunc: ffi_amba_core_rust_future_complete_i8,
                 freeFunc: ffi_amba_core_rust_future_free_i8,
                 liftFunc: FfiConverterBool.lift,
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
+    open func sessionsList() async throws -> String {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_sessions_list(
+                        self.uniffiClonePointer()
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
+                completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
+                freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
+                liftFunc: FfiConverterString.lift,
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
+    open func sessionsRevoke(sessionId: String) async throws {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_sessions_revoke(
+                        self.uniffiClonePointer(),
+                        FfiConverterString.lower(sessionId)
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_void,
+                completeFunc: ffi_amba_core_rust_future_complete_void,
+                freeFunc: ffi_amba_core_rust_future_free_void,
+                liftFunc: { $0 },
                 errorHandler: FfiConverterTypeAmbaCoreError.lift
             )
     }
@@ -2207,6 +2698,67 @@ open class AmbaCoreFfi:
             )
     }
 
+    open func storageDelete(assetId: String) async throws {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_storage_delete(
+                        self.uniffiClonePointer(),
+                        FfiConverterString.lower(assetId)
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_void,
+                completeFunc: ffi_amba_core_rust_future_complete_void,
+                freeFunc: ffi_amba_core_rust_future_free_void,
+                liftFunc: { $0 },
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
+    /**
+     * Returns the raw bytes for an asset. UniFFI maps `Vec<u8>` to
+     * `Data` on Swift and `ByteArray` on Kotlin; wrappers can pipe
+     * these into platform-native byte handlers without re-encoding.
+     */
+    open func storageDownload(assetId: String) async throws -> Data {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_storage_download(
+                        self.uniffiClonePointer(),
+                        FfiConverterString.lower(assetId)
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
+                completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
+                freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
+                liftFunc: FfiConverterData.lift,
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
+    /**
+     * `prefix` is forwarded to the server as a `?prefix=` query
+     * parameter (the server currently ignores it; surface stays
+     * forward-compatible per the SDK 4.0 contract).
+     */
+    open func storageList(prefix: String?) async throws -> String {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_storage_list(
+                        self.uniffiClonePointer(),
+                        FfiConverterOptionString.lower(prefix)
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
+                completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
+                freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
+                liftFunc: FfiConverterString.lift,
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
     open func storagePresign(bucket: String, filename: String, mimeType: String, sizeBytes: UInt64, retentionDays: UInt32?) async throws -> PresignDataFfi {
         return
             try await uniffiRustCallAsync(
@@ -2307,19 +2859,211 @@ open class AmbaCoreFfi:
             )
     }
 
-    open func track(event: String, propertiesJson: String?) async throws {
+    /**
+     * `since_json` is a JSON object `{entity_type, checkpoint_token?}`.
+     * `entity_type` is required by the server; supplying an empty
+     * value yields a Validation error from the SDK.
+     */
+    open func syncPullChanges(sinceJson: String) async throws -> String {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_sync_pull_changes(
+                        self.uniffiClonePointer(),
+                        FfiConverterString.lower(sinceJson)
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
+                completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
+                freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
+                liftFunc: FfiConverterString.lift,
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
+    /**
+     * `changes_json` is a JSON array of [`crate::sync::SyncChange`] —
+     * each `{entity_type, entity_id, action, data, client_timestamp}`.
+     */
+    open func syncPushChanges(changesJson: String) async throws -> String {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_sync_push_changes(
+                        self.uniffiClonePointer(),
+                        FfiConverterString.lower(changesJson)
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
+                completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
+                freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
+                liftFunc: FfiConverterString.lift,
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
+    open func track(event: String, propertiesJson: String?, telemetry: Bool?) async throws {
         return
             try await uniffiRustCallAsync(
                 rustFutureFunc: {
                     uniffi_amba_core_fn_method_ambacoreffi_track(
                         self.uniffiClonePointer(),
-                        FfiConverterString.lower(event), FfiConverterOptionString.lower(propertiesJson)
+                        FfiConverterString.lower(event), FfiConverterOptionString.lower(propertiesJson), FfiConverterOptionBool.lower(telemetry)
                     )
                 },
                 pollFunc: ffi_amba_core_rust_future_poll_void,
                 completeFunc: ffi_amba_core_rust_future_complete_void,
                 freeFunc: ffi_amba_core_rust_future_free_void,
                 liftFunc: { $0 },
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
+    open func unlinkApple() async throws -> UserFfi {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_unlink_apple(
+                        self.uniffiClonePointer()
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
+                completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
+                freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
+                liftFunc: FfiConverterTypeUserFfi.lift,
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
+    open func unlinkEmailOtp() async throws -> UserFfi {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_unlink_email_otp(
+                        self.uniffiClonePointer()
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
+                completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
+                freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
+                liftFunc: FfiConverterTypeUserFfi.lift,
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
+    open func unlinkGoogle() async throws -> UserFfi {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_unlink_google(
+                        self.uniffiClonePointer()
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
+                completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
+                freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
+                liftFunc: FfiConverterTypeUserFfi.lift,
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
+    open func unlinkSmsOtp() async throws -> UserFfi {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_unlink_sms_otp(
+                        self.uniffiClonePointer()
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
+                completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
+                freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
+                liftFunc: FfiConverterTypeUserFfi.lift,
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
+    open func usersGet(userId: String?) async throws -> UserFfi {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_users_get(
+                        self.uniffiClonePointer(),
+                        FfiConverterOptionString.lower(userId)
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
+                completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
+                freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
+                liftFunc: FfiConverterTypeUserFfi.lift,
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
+    open func usersUpdate(userId: String?, patchJson: String) async throws -> UserFfi {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_users_update(
+                        self.uniffiClonePointer(),
+                        FfiConverterOptionString.lower(userId), FfiConverterString.lower(patchJson)
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
+                completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
+                freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
+                liftFunc: FfiConverterTypeUserFfi.lift,
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
+    open func verifyEmailOtp(email: String, code: String) async throws -> AuthResultFfi {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_verify_email_otp(
+                        self.uniffiClonePointer(),
+                        FfiConverterString.lower(email), FfiConverterString.lower(code)
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
+                completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
+                freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
+                liftFunc: FfiConverterTypeAuthResultFfi.lift,
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
+    open func verifyMagicLink(token: String) async throws -> AuthResultFfi {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_verify_magic_link(
+                        self.uniffiClonePointer(),
+                        FfiConverterString.lower(token)
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
+                completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
+                freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
+                liftFunc: FfiConverterTypeAuthResultFfi.lift,
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
+    open func verifySmsOtp(phone: String, code: String) async throws -> AuthResultFfi {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_verify_sms_otp(
+                        self.uniffiClonePointer(),
+                        FfiConverterString.lower(phone), FfiConverterString.lower(code)
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
+                completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
+                freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
+                liftFunc: FfiConverterTypeAuthResultFfi.lift,
                 errorHandler: FfiConverterTypeAmbaCoreError.lift
             )
     }
@@ -2738,6 +3482,79 @@ public func FfiConverterTypeHttpHeader_lower(_ value: HttpHeader) -> RustBuffer 
     return FfiConverterTypeHttpHeader.lower(value)
 }
 
+/**
+ * A linked identifier returned by `Amba.auth.currentIdentifiers()`.
+ * Wire shape mirrors `crate::auth::LinkedIdentifier`.
+ */
+public struct LinkedIdentifierFfi {
+    public let provider: String
+    public let verified: Bool
+    public let identifierMasked: String?
+
+    /// Default memberwise initializers are never public by default, so we
+    /// declare one manually.
+    public init(provider: String, verified: Bool, identifierMasked: String?) {
+        self.provider = provider
+        self.verified = verified
+        self.identifierMasked = identifierMasked
+    }
+}
+
+extension LinkedIdentifierFfi: Equatable, Hashable {
+    public static func == (lhs: LinkedIdentifierFfi, rhs: LinkedIdentifierFfi) -> Bool {
+        if lhs.provider != rhs.provider {
+            return false
+        }
+        if lhs.verified != rhs.verified {
+            return false
+        }
+        if lhs.identifierMasked != rhs.identifierMasked {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(provider)
+        hasher.combine(verified)
+        hasher.combine(identifierMasked)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeLinkedIdentifierFfi: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> LinkedIdentifierFfi {
+        return
+            try LinkedIdentifierFfi(
+                provider: FfiConverterString.read(from: &buf),
+                verified: FfiConverterBool.read(from: &buf),
+                identifierMasked: FfiConverterOptionString.read(from: &buf)
+            )
+    }
+
+    public static func write(_ value: LinkedIdentifierFfi, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.provider, into: &buf)
+        FfiConverterBool.write(value.verified, into: &buf)
+        FfiConverterOptionString.write(value.identifierMasked, into: &buf)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeLinkedIdentifierFfi_lift(_ buf: RustBuffer) throws -> LinkedIdentifierFfi {
+    return try FfiConverterTypeLinkedIdentifierFfi.lift(buf)
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeLinkedIdentifierFfi_lower(_ value: LinkedIdentifierFfi) -> RustBuffer {
+    return FfiConverterTypeLinkedIdentifierFfi.lower(value)
+}
+
 public struct MediaAssetFfi {
     public let id: String
     public let bucket: String
@@ -3129,6 +3946,9 @@ public func FfiConverterTypeUserEntitlementFfi_lower(_ value: UserEntitlementFfi
 public struct UserFfi {
     public let id: String
     public let email: String?
+    public let phone: String?
+    public let emailVerified: Bool
+    public let phoneVerified: Bool
     public let displayName: String?
     public let avatarUrl: String?
     public let externalId: String?
@@ -3138,9 +3958,12 @@ public struct UserFfi {
 
     /// Default memberwise initializers are never public by default, so we
     /// declare one manually.
-    public init(id: String, email: String?, displayName: String?, avatarUrl: String?, externalId: String?, anonymousId: String?, authProviders: [String], propertiesJson: String) {
+    public init(id: String, email: String?, phone: String?, emailVerified: Bool, phoneVerified: Bool, displayName: String?, avatarUrl: String?, externalId: String?, anonymousId: String?, authProviders: [String], propertiesJson: String) {
         self.id = id
         self.email = email
+        self.phone = phone
+        self.emailVerified = emailVerified
+        self.phoneVerified = phoneVerified
         self.displayName = displayName
         self.avatarUrl = avatarUrl
         self.externalId = externalId
@@ -3156,6 +3979,15 @@ extension UserFfi: Equatable, Hashable {
             return false
         }
         if lhs.email != rhs.email {
+            return false
+        }
+        if lhs.phone != rhs.phone {
+            return false
+        }
+        if lhs.emailVerified != rhs.emailVerified {
+            return false
+        }
+        if lhs.phoneVerified != rhs.phoneVerified {
             return false
         }
         if lhs.displayName != rhs.displayName {
@@ -3182,6 +4014,9 @@ extension UserFfi: Equatable, Hashable {
     public func hash(into hasher: inout Hasher) {
         hasher.combine(id)
         hasher.combine(email)
+        hasher.combine(phone)
+        hasher.combine(emailVerified)
+        hasher.combine(phoneVerified)
         hasher.combine(displayName)
         hasher.combine(avatarUrl)
         hasher.combine(externalId)
@@ -3200,6 +4035,9 @@ public struct FfiConverterTypeUserFfi: FfiConverterRustBuffer {
             try UserFfi(
                 id: FfiConverterString.read(from: &buf),
                 email: FfiConverterOptionString.read(from: &buf),
+                phone: FfiConverterOptionString.read(from: &buf),
+                emailVerified: FfiConverterBool.read(from: &buf),
+                phoneVerified: FfiConverterBool.read(from: &buf),
                 displayName: FfiConverterOptionString.read(from: &buf),
                 avatarUrl: FfiConverterOptionString.read(from: &buf),
                 externalId: FfiConverterOptionString.read(from: &buf),
@@ -3212,6 +4050,9 @@ public struct FfiConverterTypeUserFfi: FfiConverterRustBuffer {
     public static func write(_ value: UserFfi, into buf: inout [UInt8]) {
         FfiConverterString.write(value.id, into: &buf)
         FfiConverterOptionString.write(value.email, into: &buf)
+        FfiConverterOptionString.write(value.phone, into: &buf)
+        FfiConverterBool.write(value.emailVerified, into: &buf)
+        FfiConverterBool.write(value.phoneVerified, into: &buf)
         FfiConverterOptionString.write(value.displayName, into: &buf)
         FfiConverterOptionString.write(value.avatarUrl, into: &buf)
         FfiConverterOptionString.write(value.externalId, into: &buf)
@@ -3518,6 +4359,30 @@ private struct FfiConverterOptionString: FfiConverterRustBuffer {
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
+private struct FfiConverterOptionTypeFlagAssignmentFfi: FfiConverterRustBuffer {
+    typealias SwiftType = FlagAssignmentFfi?
+
+    static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeFlagAssignmentFfi.write(value, into: &buf)
+    }
+
+    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeFlagAssignmentFfi.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
 private struct FfiConverterSequenceString: FfiConverterRustBuffer {
     typealias SwiftType = [String]
 
@@ -3585,6 +4450,31 @@ private struct FfiConverterSequenceTypeHttpHeader: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             try seq.append(FfiConverterTypeHttpHeader.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+private struct FfiConverterSequenceTypeLinkedIdentifierFfi: FfiConverterRustBuffer {
+    typealias SwiftType = [LinkedIdentifierFfi]
+
+    static func write(_ value: [LinkedIdentifierFfi], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeLinkedIdentifierFfi.write(item, into: &buf)
+        }
+    }
+
+    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [LinkedIdentifierFfi] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [LinkedIdentifierFfi]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            try seq.append(FfiConverterTypeLinkedIdentifierFfi.read(from: &buf))
         }
         return seq
     }
@@ -3693,6 +4583,9 @@ private var initializationResult: InitializationResult = {
     if uniffi_amba_core_checksum_method_ambacoreffi_app_user_id() != 65177 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_amba_core_checksum_method_ambacoreffi_catalog_get() != 36388 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_amba_core_checksum_method_ambacoreffi_catalog_list() != 60998 {
         return InitializationResult.apiChecksumMismatch
     }
@@ -3708,10 +4601,16 @@ private var initializationResult: InitializationResult = {
     if uniffi_amba_core_checksum_method_ambacoreffi_challenges_get_progress() != 14207 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_amba_core_checksum_method_ambacoreffi_collections_count() != 58390 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_amba_core_checksum_method_ambacoreffi_collections_delete() != 7108 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_amba_core_checksum_method_ambacoreffi_collections_find() != 26748 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_amba_core_checksum_method_ambacoreffi_collections_find_nearest() != 40442 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_amba_core_checksum_method_ambacoreffi_collections_find_one() != 22233 {
@@ -3747,6 +4646,9 @@ private var initializationResult: InitializationResult = {
     if uniffi_amba_core_checksum_method_ambacoreffi_currencies_get_transactions() != 43390 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_amba_core_checksum_method_ambacoreffi_current_identifiers() != 20204 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_amba_core_checksum_method_ambacoreffi_deep_links_create() != 54185 {
         return InitializationResult.apiChecksumMismatch
     }
@@ -3768,7 +4670,16 @@ private var initializationResult: InitializationResult = {
     if uniffi_amba_core_checksum_method_ambacoreffi_flags_fetch() != 33887 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_amba_core_checksum_method_ambacoreffi_flags_get() != 968 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_amba_core_checksum_method_ambacoreffi_friends_accept_request() != 53842 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_amba_core_checksum_method_ambacoreffi_friends_block_user() != 36866 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_amba_core_checksum_method_ambacoreffi_friends_decline_request() != 63907 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_amba_core_checksum_method_ambacoreffi_friends_get_friends() != 36093 {
@@ -3778,6 +4689,12 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_amba_core_checksum_method_ambacoreffi_friends_remove_block() != 28098 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_amba_core_checksum_method_ambacoreffi_friends_remove_friend() != 61869 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_amba_core_checksum_method_ambacoreffi_friends_send_request() != 5284 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_amba_core_checksum_method_ambacoreffi_friends_unblock_user() != 4034 {
@@ -3831,6 +4748,21 @@ private var initializationResult: InitializationResult = {
     if uniffi_amba_core_checksum_method_ambacoreffi_leaderboards_get_my_rank() != 5302 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_amba_core_checksum_method_ambacoreffi_leagues_cohort() != 24955 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_amba_core_checksum_method_ambacoreffi_leagues_me() != 38062 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_amba_core_checksum_method_ambacoreffi_link_account() != 50216 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_amba_core_checksum_method_ambacoreffi_link_email_otp() != 34062 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_amba_core_checksum_method_ambacoreffi_link_sms_otp() != 64600 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_amba_core_checksum_method_ambacoreffi_me() != 38244 {
         return InitializationResult.apiChecksumMismatch
     }
@@ -3838,6 +4770,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_amba_core_checksum_method_ambacoreffi_messaging_get_conversations() != 16446 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_amba_core_checksum_method_ambacoreffi_messaging_get_message() != 25623 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_amba_core_checksum_method_ambacoreffi_messaging_list_messages() != 11806 {
@@ -3897,6 +4832,15 @@ private var initializationResult: InitializationResult = {
     if uniffi_amba_core_checksum_method_ambacoreffi_refresh_session() != 16960 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_amba_core_checksum_method_ambacoreffi_request_email_otp() != 27596 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_amba_core_checksum_method_ambacoreffi_request_magic_link() != 32312 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_amba_core_checksum_method_ambacoreffi_request_sms_otp() != 11368 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_amba_core_checksum_method_ambacoreffi_reviews_create() != 6691 {
         return InitializationResult.apiChecksumMismatch
     }
@@ -3913,6 +4857,12 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_amba_core_checksum_method_ambacoreffi_roles_has_permission() != 1219 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_amba_core_checksum_method_ambacoreffi_sessions_list() != 10209 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_amba_core_checksum_method_ambacoreffi_sessions_revoke() != 32580 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_amba_core_checksum_method_ambacoreffi_set_debug() != 50723 {
@@ -3936,6 +4886,15 @@ private var initializationResult: InitializationResult = {
     if uniffi_amba_core_checksum_method_ambacoreffi_storage_commit() != 18770 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_amba_core_checksum_method_ambacoreffi_storage_delete() != 30802 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_amba_core_checksum_method_ambacoreffi_storage_download() != 13418 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_amba_core_checksum_method_ambacoreffi_storage_list() != 16248 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_amba_core_checksum_method_ambacoreffi_storage_presign() != 41099 {
         return InitializationResult.apiChecksumMismatch
     }
@@ -3954,7 +4913,40 @@ private var initializationResult: InitializationResult = {
     if uniffi_amba_core_checksum_method_ambacoreffi_streaks_qualify() != 28349 {
         return InitializationResult.apiChecksumMismatch
     }
-    if uniffi_amba_core_checksum_method_ambacoreffi_track() != 45229 {
+    if uniffi_amba_core_checksum_method_ambacoreffi_sync_pull_changes() != 32519 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_amba_core_checksum_method_ambacoreffi_sync_push_changes() != 8413 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_amba_core_checksum_method_ambacoreffi_track() != 34231 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_amba_core_checksum_method_ambacoreffi_unlink_apple() != 34379 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_amba_core_checksum_method_ambacoreffi_unlink_email_otp() != 6701 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_amba_core_checksum_method_ambacoreffi_unlink_google() != 37091 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_amba_core_checksum_method_ambacoreffi_unlink_sms_otp() != 13188 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_amba_core_checksum_method_ambacoreffi_users_get() != 8596 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_amba_core_checksum_method_ambacoreffi_users_update() != 2193 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_amba_core_checksum_method_ambacoreffi_verify_email_otp() != 15665 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_amba_core_checksum_method_ambacoreffi_verify_magic_link() != 58960 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_amba_core_checksum_method_ambacoreffi_verify_sms_otp() != 1664 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_amba_core_checksum_method_ambacoreffi_xp_claim() != 63079 {

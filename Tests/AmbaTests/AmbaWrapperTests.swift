@@ -35,6 +35,10 @@ final class MockAmbaCore: AmbaCoreFfiProtocol, @unchecked Sendable {
     var signInWithEmailCalls: [(email: String, password: String)] = []
     var signUpWithEmailCalls: [(email: String, password: String)] = []
     var signInWithSocialCalls: [(provider: SocialProviderFfi, idToken: String)] = []
+    var requestEmailOtpCalls: [String] = []
+    var verifyEmailOtpCalls: [(email: String, code: String)] = []
+    var requestSmsOtpCalls: [String] = []
+    var verifySmsOtpCalls: [(phone: String, code: String)] = []
     var signOutCalls: [Bool] = []
     var setDebugCalls: [Bool] = []
     var entitlementsHasCalls: [String] = []
@@ -68,6 +72,9 @@ final class MockAmbaCore: AmbaCoreFfiProtocol, @unchecked Sendable {
         user: UserFfi(
             id: "u_mock",
             email: nil,
+            phone: nil,
+            emailVerified: false,
+            phoneVerified: false,
             displayName: nil,
             avatarUrl: nil,
             externalId: nil,
@@ -81,6 +88,9 @@ final class MockAmbaCore: AmbaCoreFfiProtocol, @unchecked Sendable {
     var nextUser: UserFfi = UserFfi(
         id: "u_mock",
         email: "u@test",
+        phone: nil,
+        emailVerified: true,
+        phoneVerified: false,
         displayName: "U",
         avatarUrl: nil,
         externalId: nil,
@@ -168,6 +178,12 @@ final class MockAmbaCore: AmbaCoreFfiProtocol, @unchecked Sendable {
         flagsFetchCount += 1
         return nextFlags
     }
+    var flagsGetCalls: [String] = []
+    var nextFlagsGet: FlagAssignmentFfi? = nil
+    func flagsGet(key: String) async throws -> FlagAssignmentFfi? {
+        flagsGetCalls.append(key)
+        return nextFlagsGet
+    }
     func isAuthenticated() -> Bool { authed }
     func me() async throws -> UserFfi {
         meCount += 1
@@ -206,6 +222,20 @@ final class MockAmbaCore: AmbaCoreFfiProtocol, @unchecked Sendable {
         signUpWithEmailCalls.append((email, password))
         return nextAuthResult
     }
+    func requestEmailOtp(email: String) async throws {
+        requestEmailOtpCalls.append(email)
+    }
+    func verifyEmailOtp(email: String, code: String) async throws -> AuthResultFfi {
+        verifyEmailOtpCalls.append((email, code))
+        return nextAuthResult
+    }
+    func requestSmsOtp(phone: String) async throws {
+        requestSmsOtpCalls.append(phone)
+    }
+    func verifySmsOtp(phone: String, code: String) async throws -> AuthResultFfi {
+        verifySmsOtpCalls.append((phone, code))
+        return nextAuthResult
+    }
     func storageCommit(uploadId: String, assetId: String) async throws -> MediaAssetFfi {
         storageCommitCalls.append((uploadId, assetId))
         return nextMediaAsset
@@ -214,9 +244,14 @@ final class MockAmbaCore: AmbaCoreFfiProtocol, @unchecked Sendable {
         storagePresignCalls.append((bucket, filename, mimeType, sizeBytes, retentionDays))
         return nextPresign
     }
-    func track(event: String, propertiesJson: String?) async throws {
+    func track(event: String, propertiesJson: String?, telemetry: Bool?) async throws {
         if let e = trackError { throw e }
         trackCalls.append((event, propertiesJson))
+        // telemetry param is part of the FFI signature but the mock
+        // only records the event + properties — the per-event meter
+        // routing happens server-side; mocks at this layer don't
+        // need to assert on it.
+        _ = telemetry
     }
 
     // MARK: New namespace stubs (gamification)
@@ -425,6 +460,10 @@ final class MockAmbaCore: AmbaCoreFfiProtocol, @unchecked Sendable {
     func friendsRemoveBlock(friendshipId: String) async throws {
         friendsRemoveBlockCalls.append(friendshipId)
     }
+    var friendsRemoveFriendCalls: [String] = []
+    func friendsRemoveFriend(userId: String) async throws {
+        friendsRemoveFriendCalls.append(userId)
+    }
 
     var groupsCreateCalls: [String] = []
     var groupsGetCalls: [String] = []
@@ -472,7 +511,7 @@ final class MockAmbaCore: AmbaCoreFfiProtocol, @unchecked Sendable {
     }
 
     var messagingGetConversationsCount = 0
-    var messagingGetMessageCalls: [String] = []
+    var messagingGetMessageCalls: [(conversationId: String, messageId: String)] = []
     var messagingSendMessageCalls: [String] = []
     var nextMessagingGetConversationsJson: String = "[]"
     var nextMessagingGetMessageJson: String = "{}"
@@ -481,8 +520,8 @@ final class MockAmbaCore: AmbaCoreFfiProtocol, @unchecked Sendable {
         messagingGetConversationsCount += 1
         return nextMessagingGetConversationsJson
     }
-    func messagingGetMessage(id: String) async throws -> String {
-        messagingGetMessageCalls.append(id)
+    func messagingGetMessage(conversationId: String, messageId: String) async throws -> String {
+        messagingGetMessageCalls.append((conversationId, messageId))
         return nextMessagingGetMessageJson
     }
     func messagingSendMessage(requestJson: String) async throws -> String {
@@ -682,6 +721,179 @@ final class MockAmbaCore: AmbaCoreFfiProtocol, @unchecked Sendable {
     func onboardingComplete() async throws -> String {
         onboardingCompleteCount += 1
         return nextOnboardingCompleteJson
+    }
+
+    // MARK: - SDK 4.0 stubs
+
+    // ── auth (4.0 additions) ──
+    var requestMagicLinkCalls: [String] = []
+    var verifyMagicLinkCalls: [String] = []
+    var linkAccountCalls: [(provider: String, credential: String)] = []
+    func requestMagicLink(email: String) async throws {
+        requestMagicLinkCalls.append(email)
+    }
+    func verifyMagicLink(token: String) async throws -> AuthResultFfi {
+        verifyMagicLinkCalls.append(token)
+        return nextAuthResult
+    }
+    func linkAccount(provider: String, credential: String) async throws -> AuthResultFfi {
+        linkAccountCalls.append((provider, credential))
+        return nextAuthResult
+    }
+
+    // Identifier linking (sms_otp / email_otp). These four return just
+    // the user — no token rotation by contract — so they record their
+    // call args and hand back `nextUser` rather than `nextAuthResult`.
+    var linkSmsOtpCalls: [(phone: String, code: String)] = []
+    var linkEmailOtpCalls: [(email: String, code: String)] = []
+    var unlinkSmsOtpCount = 0
+    var unlinkEmailOtpCount = 0
+    var unlinkAppleCount = 0
+    var unlinkGoogleCount = 0
+    var currentIdentifiersCount = 0
+    var nextIdentifiers: [LinkedIdentifierFfi] = []
+    func linkSmsOtp(phone: String, code: String) async throws -> UserFfi {
+        linkSmsOtpCalls.append((phone, code))
+        return nextUser
+    }
+    func linkEmailOtp(email: String, code: String) async throws -> UserFfi {
+        linkEmailOtpCalls.append((email, code))
+        return nextUser
+    }
+    func unlinkSmsOtp() async throws -> UserFfi {
+        unlinkSmsOtpCount += 1
+        return nextUser
+    }
+    func unlinkEmailOtp() async throws -> UserFfi {
+        unlinkEmailOtpCount += 1
+        return nextUser
+    }
+    func unlinkApple() async throws -> UserFfi {
+        unlinkAppleCount += 1
+        return nextUser
+    }
+    func unlinkGoogle() async throws -> UserFfi {
+        unlinkGoogleCount += 1
+        return nextUser
+    }
+    func currentIdentifiers() async throws -> [LinkedIdentifierFfi] {
+        currentIdentifiersCount += 1
+        return nextIdentifiers
+    }
+
+    // ── users ──
+    var usersGetCalls: [String?] = []
+    var usersUpdateCalls: [(userId: String?, patchJson: String)] = []
+    func usersGet(userId: String?) async throws -> UserFfi {
+        usersGetCalls.append(userId)
+        return nextUser
+    }
+    func usersUpdate(userId: String?, patchJson: String) async throws -> UserFfi {
+        usersUpdateCalls.append((userId, patchJson))
+        return nextUser
+    }
+
+    // ── sessions ──
+    var sessionsListCount = 0
+    var sessionsRevokeCalls: [String] = []
+    var nextSessionsListJson: String = "[]"
+    func sessionsList() async throws -> String {
+        sessionsListCount += 1
+        return nextSessionsListJson
+    }
+    func sessionsRevoke(sessionId: String) async throws {
+        sessionsRevokeCalls.append(sessionId)
+    }
+
+    // ── sync ──
+    var syncPushChangesCalls: [String] = []
+    var syncPullChangesCalls: [String] = []
+    var nextSyncPushChangesJson: String = #"{"applied":0,"conflicts":[],"checkpoint_token":"t0"}"#
+    var nextSyncPullChangesJson: String = #"{"changes":[],"checkpoint_token":"t1","has_more":false}"#
+    func syncPushChanges(changesJson: String) async throws -> String {
+        syncPushChangesCalls.append(changesJson)
+        return nextSyncPushChangesJson
+    }
+    func syncPullChanges(sinceJson: String) async throws -> String {
+        syncPullChangesCalls.append(sinceJson)
+        return nextSyncPullChangesJson
+    }
+
+    // ── leagues ──
+    var leaguesMeCount = 0
+    var leaguesCohortCount = 0
+    var nextLeaguesMeJson: String = #"{"cohort":null,"league":null,"rank":null,"score":0,"member_count":0}"#
+    var nextLeaguesCohortJson: String = #"{"cohort":null,"league":null,"members":[]}"#
+    func leaguesMe() async throws -> String {
+        leaguesMeCount += 1
+        return nextLeaguesMeJson
+    }
+    func leaguesCohort() async throws -> String {
+        leaguesCohortCount += 1
+        return nextLeaguesCohortJson
+    }
+
+    // ── collections (4.0 additions) ──
+    var collectionsFindNearestCalls: [(collection: String, optionsJson: String)] = []
+    var collectionsCountCalls: [(collection: String, filterJson: String?)] = []
+    var nextCollectionsFindNearestJson: String = #"{"data":[]}"#
+    var nextCollectionsCountJson: String = #"{"data":{"count":0}}"#
+    func collectionsFindNearest(collection: String, optionsJson: String) async throws -> String {
+        collectionsFindNearestCalls.append((collection, optionsJson))
+        return nextCollectionsFindNearestJson
+    }
+    func collectionsCount(collection: String, filterJson: String?) async throws -> String {
+        collectionsCountCalls.append((collection, filterJson))
+        return nextCollectionsCountJson
+    }
+
+    // ── storage (4.0 additions) ──
+    var storageListCalls: [String?] = []
+    var storageDeleteCalls: [String] = []
+    var storageDownloadCalls: [String] = []
+    var nextStorageListJson: String = #"{"data":[]}"#
+    var nextStorageDownload: Data = Data()
+    func storageList(prefix: String?) async throws -> String {
+        storageListCalls.append(prefix)
+        return nextStorageListJson
+    }
+    func storageDelete(assetId: String) async throws {
+        storageDeleteCalls.append(assetId)
+    }
+    func storageDownload(assetId: String) async throws -> Data {
+        storageDownloadCalls.append(assetId)
+        return nextStorageDownload
+    }
+
+    // ── messaging (4.0 createConversation / markRead) ──
+    // (createConversation / listMessages / markRead stubs already exist above —
+    // pre-protocol-conformance for the prior shipped `Messaging.message(…)`
+    // wrapper. Re-used as-is here.)
+
+    // ── friends (4.0 additions) ──
+    var friendsSendRequestCalls: [String] = []
+    var friendsAcceptRequestCalls: [String] = []
+    var friendsDeclineRequestCalls: [String] = []
+    var nextFriendsSendRequestJson: String = "{}"
+    var nextFriendsAcceptRequestJson: String = "{}"
+    func friendsSendRequest(userId: String) async throws -> String {
+        friendsSendRequestCalls.append(userId)
+        return nextFriendsSendRequestJson
+    }
+    func friendsAcceptRequest(friendshipId: String) async throws -> String {
+        friendsAcceptRequestCalls.append(friendshipId)
+        return nextFriendsAcceptRequestJson
+    }
+    func friendsDeclineRequest(friendshipId: String) async throws {
+        friendsDeclineRequestCalls.append(friendshipId)
+    }
+
+    // ── catalog (4.0 get) ──
+    var catalogGetCalls: [String] = []
+    var nextCatalogGetJson: String = "{}"
+    func catalogGet(itemId: String) async throws -> String {
+        catalogGetCalls.append(itemId)
+        return nextCatalogGetJson
     }
 }
 
@@ -1294,7 +1506,8 @@ final class AmbaClientIsolationTests: XCTestCase {
 
         let customUser = UserFfi(
             id: "u_A_only",
-            email: nil, displayName: nil, avatarUrl: nil, externalId: nil,
+            email: nil, phone: nil, emailVerified: false, phoneVerified: false,
+            displayName: nil, avatarUrl: nil, externalId: nil,
             anonymousId: "anon-A",
             authProviders: [], propertiesJson: "{}"
         )
@@ -1900,5 +2113,375 @@ final class AmbaNewNamespaceTests: XCTestCase {
         let done = try await client.onboarding.complete()
         XCTAssertTrue(done.completed)
         XCTAssertEqual(mock.onboardingCompleteCount, 1)
+    }
+
+    // MARK: - SDK 4.0 — OTP coverage (previously zero)
+
+    /// `requestEmailOtp` forwards the email to the core (no return value).
+    func testAuthRequestEmailOtpForwards() async throws {
+        try await client.auth.requestEmailOtp(email: "alice@b.test")
+        XCTAssertEqual(mock.requestEmailOtpCalls, ["alice@b.test"])
+    }
+
+    /// `verifyEmailOtp` exchanges `(email, code)` for a session and notifies
+    /// auth-state subscribers (subscribe-then-call pattern).
+    func testAuthVerifyEmailOtpForwardsAndNotifies() async throws {
+        actor Recorder {
+            var sessions: [Session?] = []
+            func append(_ s: Session?) { sessions.append(s) }
+            func snapshot() -> [Session?] { sessions }
+        }
+        let recorder = Recorder()
+        _ = client.auth.onAuthStateChange { s in Task { await recorder.append(s) } }
+        let r = try await client.auth.verifyEmailOtp(email: "alice@b.test", code: "123456")
+        XCTAssertEqual(r.user.id, "u_mock")
+        XCTAssertEqual(mock.verifyEmailOtpCalls.count, 1)
+        XCTAssertEqual(mock.verifyEmailOtpCalls[0].email, "alice@b.test")
+        XCTAssertEqual(mock.verifyEmailOtpCalls[0].code, "123456")
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let snap = await recorder.snapshot()
+        XCTAssertEqual(snap.count, 1)
+        XCTAssertNotNil(snap[0])
+    }
+
+    /// `requestSmsOtp` forwards the phone (E.164) to the core.
+    func testAuthRequestSmsOtpForwards() async throws {
+        try await client.auth.requestSmsOtp(phone: "+15551234567")
+        XCTAssertEqual(mock.requestSmsOtpCalls, ["+15551234567"])
+    }
+
+    /// `verifySmsOtp` exchanges `(phone, code)` for a session.
+    func testAuthVerifySmsOtpForwards() async throws {
+        let r = try await client.auth.verifySmsOtp(phone: "+15551234567", code: "654321")
+        XCTAssertEqual(r.user.id, "u_mock")
+        XCTAssertEqual(mock.verifySmsOtpCalls.count, 1)
+        XCTAssertEqual(mock.verifySmsOtpCalls[0].phone, "+15551234567")
+        XCTAssertEqual(mock.verifySmsOtpCalls[0].code, "654321")
+    }
+
+    // MARK: - SDK 4.0 — auth additions (magic link, link account)
+
+    func testAuthRequestMagicLinkForwards() async throws {
+        try await client.auth.requestMagicLink(email: "bob@b.test")
+        XCTAssertEqual(mock.requestMagicLinkCalls, ["bob@b.test"])
+    }
+
+    func testAuthVerifyMagicLinkForwardsAndNotifies() async throws {
+        actor Recorder {
+            var sessions: [Session?] = []
+            func append(_ s: Session?) { sessions.append(s) }
+            func snapshot() -> [Session?] { sessions }
+        }
+        let recorder = Recorder()
+        _ = client.auth.onAuthStateChange { s in Task { await recorder.append(s) } }
+        let r = try await client.auth.verifyMagicLink(token: "ml_token_abc")
+        XCTAssertEqual(r.user.id, "u_mock")
+        XCTAssertEqual(mock.verifyMagicLinkCalls, ["ml_token_abc"])
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let snap = await recorder.snapshot()
+        XCTAssertEqual(snap.count, 1)
+    }
+
+    func testAuthLinkAccountForwards() async throws {
+        _ = try await client.auth.linkAccount(provider: "apple", credential: "apple-id-token")
+        XCTAssertEqual(mock.linkAccountCalls.count, 1)
+        XCTAssertEqual(mock.linkAccountCalls[0].provider, "apple")
+        XCTAssertEqual(mock.linkAccountCalls[0].credential, "apple-id-token")
+    }
+
+    // MARK: - SDK 4.0 — users namespace
+
+    func testUsersGetCurrentForwardsNil() async throws {
+        let u = try await client.users.get()
+        XCTAssertEqual(u.id, "u_mock")
+        XCTAssertEqual(mock.usersGetCalls, [nil])
+    }
+
+    func testUsersGetByIdForwardsId() async throws {
+        _ = try await client.users.get(userId: "u_xyz")
+        XCTAssertEqual(mock.usersGetCalls, ["u_xyz"])
+    }
+
+    func testUsersUpdateSerializesPatch() async throws {
+        _ = try await client.users.update(patch: ["display_name": "Alice"])
+        XCTAssertEqual(mock.usersUpdateCalls.count, 1)
+        XCTAssertNil(mock.usersUpdateCalls[0].userId)
+        XCTAssertTrue(mock.usersUpdateCalls[0].patchJson.contains("\"display_name\":\"Alice\""))
+    }
+
+    // MARK: - SDK 4.0 — sessions namespace
+
+    func testSessionsListDecodes() async throws {
+        mock.nextSessionsListJson = #"""
+        [{"id":"s1","user_id":"u1","started_at":"2026-05-12T00:00:00Z","ended_at":null,"duration_secs":null,"metadata":{}}]
+        """#
+        let list = try await client.sessions.list()
+        XCTAssertEqual(list.count, 1)
+        XCTAssertEqual(list[0].id, "s1")
+        XCTAssertEqual(list[0].userId, "u1")
+        XCTAssertNil(list[0].endedAt)
+    }
+
+    func testSessionsRevokeForwardsId() async throws {
+        try await client.sessions.revoke(sessionId: "s9")
+        XCTAssertEqual(mock.sessionsRevokeCalls, ["s9"])
+    }
+
+    // MARK: - SDK 4.0 — sync namespace
+
+    func testSyncPushChangesSerializesBatchAndDecodesResult() async throws {
+        let change = SyncChange(
+            entityType: "todos",
+            entityId: "t1",
+            action: "insert",
+            data: AnyEncodableDecodable(["title": "buy milk"]),
+            clientTimestamp: "2026-05-12T00:00:00Z"
+        )
+        mock.nextSyncPushChangesJson = #"""
+        {"applied":1,"conflicts":[],"checkpoint_token":"cp_1"}
+        """#
+        let result = try await client.sync.pushChanges([change])
+        XCTAssertEqual(result.applied, 1)
+        XCTAssertEqual(result.checkpointToken, "cp_1")
+        XCTAssertEqual(result.conflicts.count, 0)
+
+        let sent = try XCTUnwrap(mock.syncPushChangesCalls.first)
+        XCTAssertTrue(sent.contains("\"entity_type\":\"todos\""))
+        XCTAssertTrue(sent.contains("\"entity_id\":\"t1\""))
+        XCTAssertTrue(sent.contains("\"client_timestamp\":\"2026-05-12T00:00:00Z\""))
+    }
+
+    func testSyncPullChangesSerializesCursorAndDecodesResult() async throws {
+        mock.nextSyncPullChangesJson = #"""
+        {"changes":[{"entity_type":"todos","entity_id":"t2","action":"update","data":{},"client_timestamp":"2026-05-12T01:00:00Z"}],"checkpoint_token":"cp_2","has_more":true}
+        """#
+        let result = try await client.sync.pullChanges(
+            since: PullSince(entityType: "todos", checkpointToken: "cp_1")
+        )
+        XCTAssertEqual(result.changes.count, 1)
+        XCTAssertEqual(result.checkpointToken, "cp_2")
+        XCTAssertTrue(result.hasMore)
+
+        let sent = try XCTUnwrap(mock.syncPullChangesCalls.first)
+        XCTAssertTrue(sent.contains("\"entity_type\":\"todos\""))
+        XCTAssertTrue(sent.contains("\"checkpoint_token\":\"cp_1\""))
+    }
+
+    // MARK: - SDK 4.0 — leagues namespace
+
+    func testLeaguesMeDecodesUnassignedCohort() async throws {
+        // New users: no cohort yet — all the league/rank/cohort fields are null.
+        mock.nextLeaguesMeJson = #"""
+        {"cohort":null,"league":null,"rank":null,"score":0,"member_count":0}
+        """#
+        let me = try await client.leagues.me()
+        XCTAssertNil(me.cohort)
+        XCTAssertNil(me.league)
+        XCTAssertNil(me.rank)
+        XCTAssertEqual(me.score, 0)
+        XCTAssertEqual(mock.leaguesMeCount, 1)
+    }
+
+    func testLeaguesMeDecodesAssignedCohort() async throws {
+        mock.nextLeaguesMeJson = #"""
+        {"cohort":{"id":"co1","league_id":"l_bronze","week_start":"2026-05-11","status":"active"},"league":{"id":"l_bronze","name":"Bronze","tier_order":1},"rank":7,"score":480,"member_count":30}
+        """#
+        let me = try await client.leagues.me()
+        XCTAssertEqual(me.cohort?.id, "co1")
+        XCTAssertEqual(me.cohort?.weekStart, "2026-05-11")
+        XCTAssertEqual(me.league?.name, "Bronze")
+        XCTAssertEqual(me.league?.tierOrder, 1)
+        XCTAssertEqual(me.rank, 7)
+        XCTAssertEqual(me.score, 480)
+        XCTAssertEqual(me.memberCount, 30)
+    }
+
+    func testLeaguesCohortDecodesMembers() async throws {
+        mock.nextLeaguesCohortJson = #"""
+        {"cohort":{"id":"co1","league_id":"l_bronze","week_start":"2026-05-11","status":"active"},"league":{"id":"l_bronze","name":"Bronze","tier_order":1},"members":[{"display_name":"Alice","score":500,"rank":1},{"display_name":null,"score":120,"rank":15}]}
+        """#
+        let resp = try await client.leagues.cohort()
+        XCTAssertEqual(resp.members.count, 2)
+        XCTAssertEqual(resp.members[0].displayName, "Alice")
+        XCTAssertEqual(resp.members[0].rank, 1)
+        XCTAssertNil(resp.members[1].displayName)
+    }
+
+    // MARK: - SDK 4.0 — collections.findNearest / count
+
+    func testCollectionsFindNearestSerializesOptionsAndDecodesRows() async throws {
+        struct Doc: Decodable, Equatable { let id: String; let title: String }
+        mock.nextCollectionsFindNearestJson = #"""
+        {"data":[{"id":"d1","title":"hello"},{"id":"d2","title":"world"}]}
+        """#
+        let rows = try await client.collections.findNearest(
+            "docs",
+            vectorField: "embedding",
+            queryVector: [0.1, 0.2, 0.3],
+            k: 5,
+            as: Doc.self
+        )
+        XCTAssertEqual(rows, [Doc(id: "d1", title: "hello"), Doc(id: "d2", title: "world")])
+        let sent = mock.collectionsFindNearestCalls[0]
+        XCTAssertEqual(sent.collection, "docs")
+        XCTAssertTrue(sent.optionsJson.contains("\"vector_field\":\"embedding\""))
+        XCTAssertTrue(sent.optionsJson.contains("\"query_vector\":[0.1"))
+        XCTAssertTrue(sent.optionsJson.contains("\"k\":5"))
+    }
+
+    func testCollectionsCountWithoutFilterPassesNullJson() async throws {
+        mock.nextCollectionsCountJson = #"{"data":{"count":42}}"#
+        let n = try await client.collections.count("docs")
+        XCTAssertEqual(n, 42)
+        XCTAssertEqual(mock.collectionsCountCalls.count, 1)
+        XCTAssertEqual(mock.collectionsCountCalls[0].collection, "docs")
+        XCTAssertNil(mock.collectionsCountCalls[0].filterJson)
+    }
+
+    func testCollectionsCountWithFilterSerializes() async throws {
+        mock.nextCollectionsCountJson = #"{"data":{"count":7}}"#
+        let n = try await client.collections.count("docs", filter: AnyEncodable(["status": "active"]))
+        XCTAssertEqual(n, 7)
+        let sent = mock.collectionsCountCalls[0]
+        XCTAssertNotNil(sent.filterJson)
+        XCTAssertTrue(sent.filterJson!.contains("\"status\":\"active\""))
+    }
+
+    // MARK: - SDK 4.0 — storage list / delete / download
+
+    func testStorageListWithPrefixDecodes() async throws {
+        mock.nextStorageListJson = #"""
+        {"data":[{"id":"a1","bucket":"b","key":"avatars/alice.png","url":"https://r2.example/avatars/alice.png","mime_type":"image/png","size_bytes":1234,"created_at":"2026-05-12T00:00:00Z"}]}
+        """#
+        let assets = try await client.storage.list(prefix: "avatars/")
+        XCTAssertEqual(assets.count, 1)
+        XCTAssertEqual(assets[0].key, "avatars/alice.png")
+        XCTAssertEqual(assets[0].sizeBytes, 1234)
+        XCTAssertEqual(mock.storageListCalls, ["avatars/"])
+    }
+
+    func testStorageListDefaultsToNilPrefix() async throws {
+        _ = try await client.storage.list()
+        XCTAssertEqual(mock.storageListCalls, [nil])
+    }
+
+    func testStorageDeleteForwards() async throws {
+        try await client.storage.delete(assetId: "a1")
+        XCTAssertEqual(mock.storageDeleteCalls, ["a1"])
+    }
+
+    func testStorageDownloadReturnsData() async throws {
+        let expected = Data([0x01, 0x02, 0x03, 0x04, 0x05])
+        mock.nextStorageDownload = expected
+        let got = try await client.storage.download(assetId: "a1")
+        XCTAssertEqual(got, expected)
+        XCTAssertEqual(mock.storageDownloadCalls, ["a1"])
+    }
+
+    // MARK: - SDK 4.0 — messaging createConversation / listMessages / markRead / getMessage
+
+    func testMessagingCreateConversationSerializesParticipants() async throws {
+        mock.nextMessagingCreateConversationJson = #"""
+        {"id":"c1","participants":["u1","u2"],"last_message":null,"created_at":"2026-05-12T00:00:00Z","updated_at":"2026-05-12T00:00:00Z"}
+        """#
+        let convo = try await client.messaging.createConversation(participants: ["u1", "u2"])
+        XCTAssertEqual(convo.id, "c1")
+        XCTAssertEqual(convo.participants, ["u1", "u2"])
+        let sent = try XCTUnwrap(mock.messagingCreateConversationCalls.first)
+        XCTAssertTrue(sent.contains("\"participants\""))
+        XCTAssertTrue(sent.contains("\"u1\""))
+        XCTAssertTrue(sent.contains("\"u2\""))
+    }
+
+    func testMessagingCreateConversationWithMetadata() async throws {
+        mock.nextMessagingCreateConversationJson = #"""
+        {"id":"c2","participants":["u1","u2"],"last_message":null,"created_at":"2026-05-12T00:00:00Z","updated_at":"2026-05-12T00:00:00Z"}
+        """#
+        _ = try await client.messaging.createConversation(
+            participants: ["u1", "u2"],
+            metadata: ["topic": "billing"]
+        )
+        let sent = try XCTUnwrap(mock.messagingCreateConversationCalls.first)
+        XCTAssertTrue(sent.contains("\"metadata\""))
+        XCTAssertTrue(sent.contains("\"topic\":\"billing\""))
+    }
+
+    func testMessagingListMessagesDecodes() async throws {
+        mock.nextMessagingListMessagesJson = #"""
+        [{"id":"m1","conversation_id":"c1","sender_id":"u1","body":"hi","metadata":{},"created_at":"2026-05-12T00:00:00Z"},
+         {"id":"m2","conversation_id":"c1","sender_id":"u2","body":"hello","metadata":{},"created_at":"2026-05-12T00:00:01Z"}]
+        """#
+        let msgs = try await client.messaging.listMessages(conversationId: "c1", limit: 50, offset: 0)
+        XCTAssertEqual(msgs.count, 2)
+        XCTAssertEqual(msgs[0].id, "m1")
+        let call = mock.messagingListMessagesCalls[0]
+        XCTAssertEqual(call.0, "c1")
+        XCTAssertEqual(call.1, 50)
+        XCTAssertEqual(call.2, 0)
+    }
+
+    func testMessagingMarkReadForwards() async throws {
+        try await client.messaging.markRead(conversationId: "c1")
+        XCTAssertEqual(mock.messagingMarkReadCalls, ["c1"])
+    }
+
+    func testMessagingGetMessageReturnsNilWhenNull() async throws {
+        // Phase A's `messagingGetMessage` returns the JSON `null` literal
+        // when the id isn't present — wrapper decodes to `Optional.none`.
+        mock.nextMessagingGetMessageJson = "null"
+        let m = try await client.messaging.getMessage(conversationId: "c1", messageId: "missing")
+        XCTAssertNil(m)
+        XCTAssertEqual(mock.messagingGetMessageCalls.count, 1)
+        XCTAssertEqual(mock.messagingGetMessageCalls[0].conversationId, "c1")
+        XCTAssertEqual(mock.messagingGetMessageCalls[0].messageId, "missing")
+    }
+
+    func testMessagingGetMessageReturnsMessageWhenFound() async throws {
+        mock.nextMessagingGetMessageJson = #"""
+        {"id":"m1","conversation_id":"c1","sender_id":"u1","body":"hi","metadata":{},"created_at":"2026-05-12T00:00:00Z"}
+        """#
+        let m = try await client.messaging.getMessage(conversationId: "c1", messageId: "m1")
+        XCTAssertNotNil(m)
+        XCTAssertEqual(m?.id, "m1")
+        XCTAssertEqual(m?.body, "hi")
+    }
+
+    // MARK: - SDK 4.0 — friends sendRequest / acceptRequest / declineRequest
+
+    func testFriendsSendRequestForwards() async throws {
+        mock.nextFriendsSendRequestJson = #"""
+        {"id":"fr_new","user_id":"u1","friend_id":"u2","state":"pending","created_at":"2026-05-12T00:00:00Z"}
+        """#
+        let fr = try await client.friends.sendRequest(userId: "u2")
+        XCTAssertEqual(fr.state, .pending)
+        XCTAssertEqual(fr.friendId, "u2")
+        XCTAssertEqual(mock.friendsSendRequestCalls, ["u2"])
+    }
+
+    func testFriendsAcceptRequestForwards() async throws {
+        mock.nextFriendsAcceptRequestJson = #"""
+        {"id":"fr_new","user_id":"u1","friend_id":"u2","state":"accepted","created_at":"2026-05-12T00:00:00Z"}
+        """#
+        let fr = try await client.friends.acceptRequest(friendshipId: "fr_new")
+        XCTAssertEqual(fr.state, .accepted)
+        XCTAssertEqual(mock.friendsAcceptRequestCalls, ["fr_new"])
+    }
+
+    func testFriendsDeclineRequestForwards() async throws {
+        try await client.friends.declineRequest(friendshipId: "fr_new")
+        XCTAssertEqual(mock.friendsDeclineRequestCalls, ["fr_new"])
+    }
+
+    // MARK: - SDK 4.0 — catalog.get
+
+    func testCatalogGetByIdDecodes() async throws {
+        mock.nextCatalogGetJson = #"""
+        {"id":"c_sword","sku":"sword","name":"Sword of +5","description":"sharp","price_cents":999,"currency":"USD","metadata":{}}
+        """#
+        let item = try await client.catalog.get(id: "c_sword")
+        XCTAssertEqual(item.id, "c_sword")
+        XCTAssertEqual(item.sku, "sword")
+        XCTAssertEqual(item.priceCents, 999)
+        XCTAssertEqual(mock.catalogGetCalls, ["c_sword"])
     }
 }

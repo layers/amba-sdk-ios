@@ -24,7 +24,7 @@ import Foundation
 
 // MARK: - AmbaClient (the real implementation)
 
-/// Instance class that owns the UniFFI core and exposes per-namespace
+/// Instance class that owns the engine handle and exposes per-namespace
 /// accessors. Construct one and call methods directly, or use the
 /// `Amba` static facade for global SDK access.
 public final class AmbaClient {
@@ -36,6 +36,9 @@ public final class AmbaClient {
 
     public let events: Events
     public let auth: Auth
+    public let users: Users
+    public let sessions: Sessions
+    public let sync: Sync
     public let collections: Collections
     public let storage: Storage
     public let push: Push
@@ -49,6 +52,7 @@ public final class AmbaClient {
     public let currencies: Currencies
     public let inventory: Inventory
     public let leaderboards: Leaderboards
+    public let leagues: Leagues
     public let stores: Stores
     public let xp: Xp
     public let streaks: Streaks
@@ -101,6 +105,9 @@ public final class AmbaClient {
         self.uploadSession = uploadSession
         self.events = Events(core: core)
         self.auth = Auth(core: core)
+        self.users = Users(core: core)
+        self.sessions = Sessions(core: core)
+        self.sync = Sync(core: core)
         self.collections = Collections(core: core)
         self.storage = Storage(core: core, uploadSession: uploadSession)
         self.push = Push(core: core)
@@ -113,6 +120,7 @@ public final class AmbaClient {
         self.currencies = Currencies(core: core)
         self.inventory = Inventory(core: core)
         self.leaderboards = Leaderboards(core: core)
+        self.leagues = Leagues(core: core)
         self.stores = Stores(core: core)
         self.xp = Xp(core: core)
         self.streaks = Streaks(core: core)
@@ -143,7 +151,11 @@ public final class AmbaClient {
     public final class Events {
         private let core: AmbaCoreFfiProtocol
         init(core: AmbaCoreFfiProtocol) { self.core = core }
-        public func track(_ event: String, properties: [String: Any]? = nil) async throws {
+        public func track(
+            _ event: String,
+            properties: [String: Any]? = nil,
+            telemetry: Bool? = nil
+        ) async throws {
             let propsJson: String?
             if let p = properties {
                 let data = try JSONSerialization.data(withJSONObject: p, options: [])
@@ -151,7 +163,16 @@ public final class AmbaClient {
             } else {
                 propsJson = nil
             }
-            try await core.track(event: event, propertiesJson: propsJson)
+            // Rust core's track FFI signature is
+            // `track(event:propertiesJson:telemetry:)` — the `telemetry`
+            // parameter was added when the Wave-2 billing bifurcation
+            // shipped (PR #241). The Swift wrapper wasn't updated to
+            // pass it through, so a fresh `swift build` failed with
+            // `missing argument for parameter 'telemetry' in call`
+            // (PR #246 docs-swift, fefdc02b). Pass through whatever
+            // the caller asked for, defaulting to nil (= engagement
+            // event, not telemetry).
+            try await core.track(event: event, propertiesJson: propsJson, telemetry: telemetry)
         }
     }
 
@@ -187,6 +208,57 @@ public final class AmbaClient {
         }
         public func signInWithGoogle(idToken: String) async throws -> AuthResultFfi {
             let r = try await core.signInWithSocial(provider: .google, idToken: idToken)
+            notifyFromAuthResult(r)
+            return r
+        }
+        /// Request a one-time passcode for `email`. The server emails a
+        /// 6-digit code; the user types it in, then call
+        /// `verifyEmailOtp(email:code:)` to exchange for a session.
+        public func requestEmailOtp(email: String) async throws {
+            try await core.requestEmailOtp(email: email)
+        }
+        /// Exchange `(email, code)` for a session. Returns the same
+        /// `AuthResultFfi` shape as `signInWithEmail`.
+        public func verifyEmailOtp(email: String, code: String) async throws -> AuthResultFfi {
+            let r = try await core.verifyEmailOtp(email: email, code: code)
+            notifyFromAuthResult(r)
+            return r
+        }
+        /// Request a one-time passcode by SMS. `phone` must be E.164
+        /// (starts with `+`, 8–15 total digits). The SDK rejects
+        /// non-E.164 phones before issuing the network call.
+        public func requestSmsOtp(phone: String) async throws {
+            try await core.requestSmsOtp(phone: phone)
+        }
+        /// Exchange `(phone, code)` for a session. Returns the same
+        /// `AuthResultFfi` shape as `verifyEmailOtp`.
+        public func verifySmsOtp(phone: String, code: String) async throws -> AuthResultFfi {
+            let r = try await core.verifySmsOtp(phone: phone, code: code)
+            notifyFromAuthResult(r)
+            return r
+        }
+        /// Request a magic-link email. The server emails a tokenized URL;
+        /// open the URL on the device, extract the token from the deep link,
+        /// then call `verifyMagicLink(token:)` to exchange for a session.
+        /// NEW in SDK 4.0.
+        public func requestMagicLink(email: String) async throws {
+            try await core.requestMagicLink(email: email)
+        }
+        /// Exchange the token from a magic-link URL for a session.
+        /// NEW in SDK 4.0.
+        public func verifyMagicLink(token: String) async throws -> AuthResultFfi {
+            let r = try await core.verifyMagicLink(token: token)
+            notifyFromAuthResult(r)
+            return r
+        }
+        /// Link an external credential (Apple/Google/email/etc.) to the
+        /// current — possibly anonymous — session, upgrading it to an
+        /// identified account. `provider` is the lowercase identifier
+        /// the server recognizes (e.g. `"apple"`, `"google"`, `"email"`).
+        /// `credential` is provider-specific (id token for Apple/Google,
+        /// `email:password` for email). NEW in SDK 4.0.
+        public func linkAccount(provider: String, credential: String) async throws -> AuthResultFfi {
+            let r = try await core.linkAccount(provider: provider, credential: credential)
             notifyFromAuthResult(r)
             return r
         }
@@ -280,6 +352,66 @@ public final class AmbaClient {
         }
     }
 
+    /// SDK 4.0 — profile read/update. Distinct from `auth`, which owns
+    /// credentials and session lifecycle. `users` is the read/write
+    /// surface for the authenticated user's profile row.
+    public final class Users {
+        private let core: AmbaCoreFfiProtocol
+        init(core: AmbaCoreFfiProtocol) { self.core = core }
+        /// Fetch a user profile. `userId == nil` resolves to the current
+        /// authenticated user (`/v1/client/users/me`). A non-nil `userId`
+        /// is reserved for a future server route and surfaces as a
+        /// validation error from the core today.
+        public func get(userId: String? = nil) async throws -> UserFfi {
+            try await core.usersGet(userId: userId)
+        }
+        /// Patch the user profile. `patch` is a JSON-serializable
+        /// dictionary of fields to update (e.g. `["displayName": "Alice"]`).
+        /// `userId == nil` patches the current user.
+        public func update(userId: String? = nil, patch: [String: Any]) async throws -> UserFfi {
+            let data = try JSONSerialization.data(withJSONObject: patch, options: [])
+            let patchJson = String(data: data, encoding: .utf8) ?? "{}"
+            return try await core.usersUpdate(userId: userId, patchJson: patchJson)
+        }
+    }
+
+    /// SDK 4.0 — active app-session listing + revocation. Distinct from
+    /// the in-SDK `auth.getSession()` snapshot (which returns the current
+    /// auth-session token state); these are server-tracked app sessions
+    /// surfaced for "sign out other devices" flows.
+    public final class Sessions {
+        private let core: AmbaCoreFfiProtocol
+        init(core: AmbaCoreFfiProtocol) { self.core = core }
+        public func list() async throws -> [AppSession] {
+            let json = try await core.sessionsList()
+            return try Amba.decodeJSON([AppSession].self, from: json)
+        }
+        public func revoke(sessionId: String) async throws {
+            try await core.sessionsRevoke(sessionId: sessionId)
+        }
+    }
+
+    /// SDK 4.0 — offline change replay. `pushChanges` replays a batch of
+    /// buffered mutations against the server; conflicts are server-wins
+    /// and surfaced in the response. `pullChanges` fetches remote-origin
+    /// changes since the supplied cursor so the local cache converges.
+    public final class Sync {
+        private let core: AmbaCoreFfiProtocol
+        init(core: AmbaCoreFfiProtocol) { self.core = core }
+        public func pushChanges(_ changes: [SyncChange]) async throws -> PushChangesResult {
+            let data = try JSONEncoder.amba.encode(changes)
+            let changesJson = String(data: data, encoding: .utf8) ?? "[]"
+            let json = try await core.syncPushChanges(changesJson: changesJson)
+            return try Amba.decodeJSON(PushChangesResult.self, from: json)
+        }
+        public func pullChanges(since: PullSince) async throws -> PullChangesResult {
+            let data = try JSONEncoder.amba.encode(since)
+            let sinceJson = String(data: data, encoding: .utf8) ?? "{}"
+            let json = try await core.syncPullChanges(sinceJson: sinceJson)
+            return try Amba.decodeJSON(PullChangesResult.self, from: json)
+        }
+    }
+
     public final class Collections {
         private let core: AmbaCoreFfiProtocol
         init(core: AmbaCoreFfiProtocol) { self.core = core }
@@ -312,6 +444,36 @@ public final class AmbaClient {
         public func delete(_ name: String, id: String) async throws {
             _ = try await core.collectionsDelete(collection: name, id: id)
         }
+        /// NEW in 4.0. Vector similarity search. `vectorField` is the
+        /// column holding the embedding, `queryVector` the probe vector,
+        /// `k` the desired number of neighbors. Optional `filter` further
+        /// narrows the candidate set before ranking.
+        public func findNearest<T: Decodable>(
+            _ name: String,
+            vectorField: String,
+            queryVector: [Float],
+            k: UInt32,
+            filter: AnyEncodable? = nil,
+            as type: T.Type = T.self
+        ) async throws -> [T] {
+            let opts = NearestOptions(vectorField: vectorField, queryVector: queryVector, k: k, filter: filter)
+            let data = try JSONEncoder.amba.encode(opts)
+            let optionsJson = String(data: data, encoding: .utf8) ?? "{}"
+            let respJson = try await core.collectionsFindNearest(collection: name, optionsJson: optionsJson)
+            return try Amba.decodeJSON(NearestResponse<T>.self, from: respJson).data
+        }
+        /// NEW in 4.0. Row count, optionally constrained by a `filter`.
+        public func count(_ name: String, filter: AnyEncodable? = nil) async throws -> UInt64 {
+            let filterJson: String?
+            if let f = filter {
+                let data = try JSONEncoder.amba.encode(f)
+                filterJson = String(data: data, encoding: .utf8)
+            } else {
+                filterJson = nil
+            }
+            let respJson = try await core.collectionsCount(collection: name, filterJson: filterJson)
+            return try Amba.decodeJSON(CountResponse.self, from: respJson).data.count
+        }
     }
 
     public final class Storage {
@@ -342,6 +504,27 @@ public final class AmbaClient {
                 throw AmbaSwiftError.uploadFailed
             }
             return try await commit(uploadId: pre.uploadId, assetId: pre.assetId)
+        }
+        /// NEW in 4.0. List media assets, optionally narrowed by a key
+        /// `prefix` (server-side filter — forward-compatible; the server
+        /// currently ignores `prefix` and returns all assets).
+        public func list(prefix: String? = nil) async throws -> [MediaAssetSummary] {
+            let json = try await core.storageList(prefix: prefix)
+            return try Amba.decodeJSON(StorageListResponse.self, from: json).data
+        }
+        /// NEW in 4.0. Delete an asset by id (the canonical media id —
+        /// `MediaAssetFfi.id`, NOT the storage key). The Rust core stages
+        /// this as `assetId` to match the server route shape.
+        public func delete(assetId: String) async throws {
+            try await core.storageDelete(assetId: assetId)
+        }
+        /// NEW in 4.0. Download the asset bytes. Returns `Data` (UniFFI
+        /// maps the Rust `Vec<u8>` → Swift `Data` natively, no extra
+        /// copy). For very large assets prefer streaming via the asset's
+        /// signed `url` instead — `download` materializes the whole body
+        /// into memory.
+        public func download(assetId: String) async throws -> Data {
+            try await core.storageDownload(assetId: assetId)
         }
     }
 
@@ -416,6 +599,12 @@ public final class AmbaClient {
         init(core: AmbaCoreFfiProtocol) { self.core = core }
         public func fetch() async throws -> [FlagAssignmentFfi] {
             try await core.flagsFetch()
+        }
+        /// Single-flag lookup (SDK 4.0). Wraps
+        /// `GET /v1/client/flags/{key}`. Returns `nil` for unknown
+        /// or disabled keys; rethrows other failures.
+        public func get(key: String) async throws -> FlagAssignmentFfi? {
+            try await core.flagsGet(key: key)
         }
     }
 
@@ -598,6 +787,27 @@ public final class AmbaClient {
         }
     }
 
+    /// SDK 4.0 — weekly tiered leaderboard cohorts. The server rolls every
+    /// active user into a ~30-member cohort each Monday; players race for
+    /// tier-up / tier-down on a 7-day clock.
+    public final class Leagues {
+        private let core: AmbaCoreFfiProtocol
+        init(core: AmbaCoreFfiProtocol) { self.core = core }
+        /// Current user's cohort standing — rank, score, cohort metadata.
+        /// `cohort` / `league` / `rank` are nil before the user's first
+        /// Monday rollover.
+        public func me() async throws -> LeagueMembership {
+            let json = try await core.leaguesMe()
+            return try Amba.decodeJSON(LeagueMembership.self, from: json)
+        }
+        /// Full cohort roster (anonymised: `displayName` + `score` + `rank`,
+        /// NOT user ids).
+        public func cohort() async throws -> LeagueCohortResponse {
+            let json = try await core.leaguesCohort()
+            return try Amba.decodeJSON(LeagueCohortResponse.self, from: json)
+        }
+    }
+
     // MARK: - Social namespaces
 
     public final class Feeds {
@@ -620,6 +830,23 @@ public final class AmbaClient {
             let json = try await core.friendsGetFriends()
             return try Amba.decodeJSON([Friendship].self, from: json)
         }
+        /// NEW in 4.0. Send a friend request to `userId`. Returns the
+        /// newly-created `Friendship` row in `pending` state.
+        public func sendRequest(userId: String) async throws -> Friendship {
+            let json = try await core.friendsSendRequest(userId: userId)
+            return try Amba.decodeJSON(Friendship.self, from: json)
+        }
+        /// NEW in 4.0. Accept a pending friend request, returning the
+        /// updated `Friendship` row in `accepted` state.
+        public func acceptRequest(friendshipId: String) async throws -> Friendship {
+            let json = try await core.friendsAcceptRequest(friendshipId: friendshipId)
+            return try Amba.decodeJSON(Friendship.self, from: json)
+        }
+        /// NEW in 4.0. Decline a pending friend request. Server discards
+        /// the row, so this returns Void.
+        public func declineRequest(friendshipId: String) async throws {
+            try await core.friendsDeclineRequest(friendshipId: friendshipId)
+        }
         public func blockUser(userId: String) async throws -> Friendship {
             let json = try await core.friendsBlockUser(userId: userId)
             return try Amba.decodeJSON(Friendship.self, from: json)
@@ -629,6 +856,13 @@ public final class AmbaClient {
         }
         public func removeBlock(friendshipId: String) async throws {
             try await core.friendsRemoveBlock(friendshipId: friendshipId)
+        }
+        /// Unfriend by the other user's id (SDK 4.0). Wraps
+        /// `DELETE /v1/client/friends/by-user/{userId}`. Server
+        /// preserves blocked rows; use `unblockUser(_:)` to clear
+        /// those instead.
+        public func removeFriend(userId: String) async throws {
+            try await core.friendsRemoveFriend(userId: userId)
         }
     }
 
@@ -678,54 +912,57 @@ public final class AmbaClient {
             let json = try await core.messagingGetConversations()
             return try Amba.decodeJSON([Conversation].self, from: json)
         }
-        /// Fetch a single message by id. There is no GET-one-by-id route in
-        /// the messaging API today (#158 messaging refactor removed it); list
-        /// the conversation's messages and filter client-side.
-        ///
-        /// Passes an explicit large `limit` to defeat the server's default
-        /// page size: a `nil` limit lets the server pick a default (today
-        /// the API serves ~50 messages per page), so a message that exists
-        /// past page-1 would return a false `NOT_FOUND` even though the
-        /// message is real. Caught by Cursor BugBot on #161.
-        ///
-        /// `messageLookupLimit = 1000` is enough for every realistic
-        /// conversation we'd want to search this way; if a conversation has
-        /// more than 1000 messages, this lookup is the wrong tool —
-        /// paginate explicitly via `core.messagingListMessages` instead.
-        ///
-        /// TODO(DX-19): if the API grows a single-message endpoint, route
-        /// directly through `core` instead of paging.
-        ///
-        /// Throws `AmbaApiError(code: NOT_FOUND)` when the id isn't present in
-        /// the conversation. This is semantically the same shape the server
-        /// would have returned from a real GET-one route (`404` →
-        /// `AmbaCoreError.Structured(code: "NOT_FOUND")`), so SDK consumers'
-        /// `catch where e.code == AmbaApiErrorCode.notFound` branches resolve
-        /// correctly. Not `AmbaSwiftError.decode` — that maps to
-        /// `VALIDATION_ERROR`, which is wrong for a not-found condition
-        /// (caught by Cursor BugBot on #161).
-        public func message(conversationId: String, id: String) async throws -> Message {
+        /// NEW in 4.0. Create a conversation with the supplied
+        /// `participants` (user ids). Optional `metadata` is a free-form
+        /// JSON-serializable blob the server stores on the conversation
+        /// row. Replaces the previous workaround of starting a thread by
+        /// sending an initial message with `toUserId`.
+        public func createConversation(
+            participants: [String],
+            metadata: [String: Any]? = nil
+        ) async throws -> Conversation {
+            var body: [String: Any] = ["participants": participants]
+            if let metadata = metadata {
+                body["metadata"] = metadata
+            }
+            let data = try JSONSerialization.data(withJSONObject: body, options: [])
+            let requestJson = String(data: data, encoding: .utf8) ?? "{}"
+            let json = try await core.messagingCreateConversation(requestJson: requestJson)
+            return try Amba.decodeJSON(Conversation.self, from: json)
+        }
+        /// NEW in 4.0. List messages in a conversation, paginated. `limit`
+        /// caps the page size (server-defined default when nil); `offset`
+        /// skips the leading N messages for cursor-style paging.
+        public func listMessages(
+            conversationId: String,
+            limit: UInt32? = nil,
+            offset: UInt32? = nil
+        ) async throws -> [Message] {
             let json = try await core.messagingListMessages(
                 conversationId: conversationId,
-                limit: Self.messageLookupLimit,
-                offset: nil
+                limit: limit,
+                offset: offset
             )
-            let messages = try Amba.decodeJSON([Message].self, from: json)
-            guard let found = messages.first(where: { $0.id == id }) else {
-                throw AmbaApiError(
-                    code: AmbaApiErrorCode.notFound,
-                    message: "no message \(id) in conversation \(conversationId)"
-                )
-            }
-            return found
+            return try Amba.decodeJSON([Message].self, from: json)
         }
-
-        /// Cap on how many messages `message(conversationId:id:)` will pull
-        /// before declaring a `NOT_FOUND`. Picked to be larger than any
-        /// realistic single conversation that callers would search this
-        /// way — if you have >1000 messages, page explicitly via
-        /// `core.messagingListMessages`.
-        private static let messageLookupLimit: UInt32 = 1000
+        /// NEW in 4.0. Mark every unread message in `conversationId` as
+        /// read for the current user.
+        public func markRead(conversationId: String) async throws {
+            _ = try await core.messagingMarkRead(conversationId: conversationId)
+        }
+        /// Fetch a single message by id. Phase A 4.0 wired a dedicated
+        /// `messagingGetMessage` symbol in the Rust core (implemented via
+        /// paginated `list_messages` server-side; the server itself
+        /// doesn't ship a GET-one route yet but the core hides that).
+        /// Returns `nil` when the id isn't present in the conversation —
+        /// matches the optional-result shape the spec calls for.
+        public func getMessage(conversationId: String, messageId: String) async throws -> Message? {
+            let json = try await core.messagingGetMessage(
+                conversationId: conversationId,
+                messageId: messageId
+            )
+            return try Amba.decodeJSON(Message?.self, from: json)
+        }
         public func sendMessage(_ request: SendMessageRequest) async throws -> Message {
             let data = try JSONEncoder.amba.encode(request)
             let requestJson = String(data: data, encoding: .utf8) ?? "{}"
@@ -816,6 +1053,11 @@ public final class AmbaClient {
         public func list() async throws -> [CatalogItem] {
             let json = try await core.catalogList()
             return try Amba.decodeJSON([CatalogItem].self, from: json)
+        }
+        /// NEW in 4.0. Fetch a single catalog item by id.
+        public func get(id: String) async throws -> CatalogItem {
+            let json = try await core.catalogGet(itemId: id)
+            return try Amba.decodeJSON(CatalogItem.self, from: json)
         }
     }
 
@@ -917,7 +1159,7 @@ public final class AmbaClient {
 ///
 ///   `configure(...)` is now **single-write** — calling it twice
 ///   without an intervening `reset()` throws `.alreadyConfigured`.
-///   This mirrors the Rust-side single-init guard (`amba_init`
+///   This mirrors the engine-side single-init guard (`amba_init`
 ///   returns `AlreadyInitialized` on second call — fix #9). The
 ///   customer migration is: explicit `Amba.reset()` first if
 ///   re-init is intentional.
@@ -985,14 +1227,17 @@ public enum Amba {
     /// new client. Use for tests, credential rotation, or logout flows
     /// that intentionally want a clean slate.
     ///
-    /// Note: this clears the SDK-side facade but does not currently
-    /// invoke the Rust core's `amba_reset` — the UniFFI surface
-    /// doesn't expose it (issue tracked separately). Until that lands,
-    /// calling `configure(...)` again after `reset()` will succeed at
-    /// the Swift layer but throw `AlreadyInitialized` at the Rust
-    /// layer. This is fine for the lock test (which uses mock-backed
-    /// clients via the internal `_installForTesting`) but a known
-    /// limitation for real re-init.
+    /// Reset wiring: dropping `sharedClient` releases the only Swift-side
+    /// strong reference to `AmbaCoreFfi`. UniFFI's generated wrapper runs
+    /// the Rust `Drop` impl on deallocation, which releases the
+    /// `Arc<AmbaCore>` plus its persistence handles, HTTP pool, and
+    /// identity slot. The UniFFI constructor (`AmbaCoreFfi(config:)`) is
+    /// instance-scoped — it does NOT consult the C-FFI `amba_init`
+    /// singleton slot — so a subsequent `configure(...)` constructs a
+    /// fully independent core. Reset thus stops new calls from observing
+    /// the old core; in-flight calls complete against the pre-reset state
+    /// (same contract as the C FFI's `amba_reset` documented in
+    /// `sdks/core/src/ffi.rs`).
     public static func reset() {
         lock.lock()
         defer { lock.unlock() }
@@ -1055,8 +1300,16 @@ public enum Amba {
     public static func setDebug(_ enabled: Bool) { (try? requireClient())?.setDebug(enabled) }
 
     public enum events {
-        public static func track(_ event: String, properties: [String: Any]? = nil) async throws {
-            try await Amba.requireClient().events.track(event, properties: properties)
+        public static func track(
+            _ event: String,
+            properties: [String: Any]? = nil,
+            telemetry: Bool? = nil
+        ) async throws {
+            try await Amba.requireClient().events.track(
+                event,
+                properties: properties,
+                telemetry: telemetry
+            )
         }
     }
 
@@ -1075,6 +1328,27 @@ public enum Amba {
         }
         public static func signInWithGoogle(idToken: String) async throws -> AuthResultFfi {
             try await Amba.requireClient().auth.signInWithGoogle(idToken: idToken)
+        }
+        public static func requestEmailOtp(email: String) async throws {
+            try await Amba.requireClient().auth.requestEmailOtp(email: email)
+        }
+        public static func verifyEmailOtp(email: String, code: String) async throws -> AuthResultFfi {
+            try await Amba.requireClient().auth.verifyEmailOtp(email: email, code: code)
+        }
+        public static func requestSmsOtp(phone: String) async throws {
+            try await Amba.requireClient().auth.requestSmsOtp(phone: phone)
+        }
+        public static func verifySmsOtp(phone: String, code: String) async throws -> AuthResultFfi {
+            try await Amba.requireClient().auth.verifySmsOtp(phone: phone, code: code)
+        }
+        public static func requestMagicLink(email: String) async throws {
+            try await Amba.requireClient().auth.requestMagicLink(email: email)
+        }
+        public static func verifyMagicLink(token: String) async throws -> AuthResultFfi {
+            try await Amba.requireClient().auth.verifyMagicLink(token: token)
+        }
+        public static func linkAccount(provider: String, credential: String) async throws -> AuthResultFfi {
+            try await Amba.requireClient().auth.linkAccount(provider: provider, credential: credential)
         }
         public static func signOut(rotateAnonymousId: Bool = false) async throws {
             try await Amba.requireClient().auth.signOut(rotateAnonymousId: rotateAnonymousId)
@@ -1099,6 +1373,33 @@ public enum Amba {
         }
     }
 
+    public enum users {
+        public static func get(userId: String? = nil) async throws -> UserFfi {
+            try await Amba.requireClient().users.get(userId: userId)
+        }
+        public static func update(userId: String? = nil, patch: [String: Any]) async throws -> UserFfi {
+            try await Amba.requireClient().users.update(userId: userId, patch: patch)
+        }
+    }
+
+    public enum sessions {
+        public static func list() async throws -> [AppSession] {
+            try await Amba.requireClient().sessions.list()
+        }
+        public static func revoke(sessionId: String) async throws {
+            try await Amba.requireClient().sessions.revoke(sessionId: sessionId)
+        }
+    }
+
+    public enum sync {
+        public static func pushChanges(_ changes: [SyncChange]) async throws -> PushChangesResult {
+            try await Amba.requireClient().sync.pushChanges(changes)
+        }
+        public static func pullChanges(since: PullSince) async throws -> PullChangesResult {
+            try await Amba.requireClient().sync.pullChanges(since: since)
+        }
+    }
+
     public enum collections {
         public static func find<T: Decodable>(_ name: String, options: FindOptions = FindOptions(), as type: T.Type = T.self) async throws -> FindResponse<T> {
             try await Amba.requireClient().collections.find(name, options: options, as: T.self)
@@ -1115,6 +1416,19 @@ public enum Amba {
         public static func delete(_ name: String, id: String) async throws {
             try await Amba.requireClient().collections.delete(name, id: id)
         }
+        public static func findNearest<T: Decodable>(
+            _ name: String,
+            vectorField: String,
+            queryVector: [Float],
+            k: UInt32,
+            filter: AnyEncodable? = nil,
+            as type: T.Type = T.self
+        ) async throws -> [T] {
+            try await Amba.requireClient().collections.findNearest(name, vectorField: vectorField, queryVector: queryVector, k: k, filter: filter, as: T.self)
+        }
+        public static func count(_ name: String, filter: AnyEncodable? = nil) async throws -> UInt64 {
+            try await Amba.requireClient().collections.count(name, filter: filter)
+        }
     }
 
     public enum storage {
@@ -1126,6 +1440,15 @@ public enum Amba {
         }
         public static func upload(bucket: String, data: Data, filename: String, mimeType: String, retentionDays: UInt32? = nil) async throws -> MediaAssetFfi {
             try await Amba.requireClient().storage.upload(bucket: bucket, data: data, filename: filename, mimeType: mimeType, retentionDays: retentionDays)
+        }
+        public static func list(prefix: String? = nil) async throws -> [MediaAssetSummary] {
+            try await Amba.requireClient().storage.list(prefix: prefix)
+        }
+        public static func delete(assetId: String) async throws {
+            try await Amba.requireClient().storage.delete(assetId: assetId)
+        }
+        public static func download(assetId: String) async throws -> Data {
+            try await Amba.requireClient().storage.download(assetId: assetId)
         }
     }
 
@@ -1176,6 +1499,11 @@ public enum Amba {
     public enum flags {
         public static func fetch() async throws -> [FlagAssignmentFfi] {
             try await Amba.requireClient().flags.fetch()
+        }
+        /// Single-flag lookup (SDK 4.0). Returns `nil` for unknown
+        /// or disabled keys.
+        public static func get(key: String) async throws -> FlagAssignmentFfi? {
+            try await Amba.requireClient().flags.get(key: key)
         }
     }
 
@@ -1274,6 +1602,15 @@ public enum Amba {
         }
     }
 
+    public enum leagues {
+        public static func me() async throws -> LeagueMembership {
+            try await Amba.requireClient().leagues.me()
+        }
+        public static func cohort() async throws -> LeagueCohortResponse {
+            try await Amba.requireClient().leagues.cohort()
+        }
+    }
+
     // MARK: - Social static facade
 
     public enum feeds {
@@ -1289,6 +1626,15 @@ public enum Amba {
         public static func friends() async throws -> [Friendship] {
             try await Amba.requireClient().friends.friends()
         }
+        public static func sendRequest(userId: String) async throws -> Friendship {
+            try await Amba.requireClient().friends.sendRequest(userId: userId)
+        }
+        public static func acceptRequest(friendshipId: String) async throws -> Friendship {
+            try await Amba.requireClient().friends.acceptRequest(friendshipId: friendshipId)
+        }
+        public static func declineRequest(friendshipId: String) async throws {
+            try await Amba.requireClient().friends.declineRequest(friendshipId: friendshipId)
+        }
         public static func blockUser(userId: String) async throws -> Friendship {
             try await Amba.requireClient().friends.blockUser(userId: userId)
         }
@@ -1297,6 +1643,10 @@ public enum Amba {
         }
         public static func removeBlock(friendshipId: String) async throws {
             try await Amba.requireClient().friends.removeBlock(friendshipId: friendshipId)
+        }
+        /// Unfriend by the other user's id (SDK 4.0).
+        public static func removeFriend(userId: String) async throws {
+            try await Amba.requireClient().friends.removeFriend(userId: userId)
         }
     }
 
@@ -1331,8 +1681,28 @@ public enum Amba {
         public static func conversations() async throws -> [Conversation] {
             try await Amba.requireClient().messaging.conversations()
         }
-        public static func message(conversationId: String, id: String) async throws -> Message {
-            try await Amba.requireClient().messaging.message(conversationId: conversationId, id: id)
+        public static func createConversation(
+            participants: [String],
+            metadata: [String: Any]? = nil
+        ) async throws -> Conversation {
+            try await Amba.requireClient().messaging.createConversation(participants: participants, metadata: metadata)
+        }
+        public static func listMessages(
+            conversationId: String,
+            limit: UInt32? = nil,
+            offset: UInt32? = nil
+        ) async throws -> [Message] {
+            try await Amba.requireClient().messaging.listMessages(
+                conversationId: conversationId,
+                limit: limit,
+                offset: offset
+            )
+        }
+        public static func markRead(conversationId: String) async throws {
+            try await Amba.requireClient().messaging.markRead(conversationId: conversationId)
+        }
+        public static func getMessage(conversationId: String, messageId: String) async throws -> Message? {
+            try await Amba.requireClient().messaging.getMessage(conversationId: conversationId, messageId: messageId)
         }
         public static func sendMessage(_ request: SendMessageRequest) async throws -> Message {
             try await Amba.requireClient().messaging.sendMessage(request)
@@ -1392,6 +1762,9 @@ public enum Amba {
     public enum catalog {
         public static func list() async throws -> [CatalogItem] {
             try await Amba.requireClient().catalog.list()
+        }
+        public static func get(id: String) async throws -> CatalogItem {
+            try await Amba.requireClient().catalog.get(id: id)
         }
     }
 
@@ -1581,7 +1954,7 @@ public struct AiMessageResponse: Decodable {
 /// Resolved remote config returned by `Amba.config.fetch()`.
 ///
 /// Server: `GET /v1/client/config` returns body `{ "data": { key → value } }`
-/// plus an `ETag` response header carrying the version stamp. The Rust
+/// plus an `ETag` response header carrying the version stamp. The engine
 /// core lifts the `data` map into `values` and parses the ETag prefix
 /// into `version`. `version` is `nil` when the server didn't send an
 /// ETag (e.g. an empty `config_versions` row on a brand-new project).
@@ -1684,7 +2057,261 @@ extension JSONEncoder {
     }()
 }
 
-public let SDK_VERSION = "1.0.1"
+public let SDK_VERSION = "4.0.1"
+
+// MARK: - SDK 4.0 NEW types (sessions / sync / leagues / storage / collections)
+
+/// Server-tracked app session row surfaced by `sessions.list()`. Mirrors
+/// `sdks/core/src/sessions.rs::AppSession`.
+public struct AppSession: Codable, Equatable {
+    public let id: String
+    public let userId: String
+    public let startedAt: Date
+    public let endedAt: Date?
+    public let durationSecs: UInt32?
+    public let metadata: AnyDecodable?
+
+    enum CodingKeys: String, CodingKey {
+        case id, metadata
+        case userId = "user_id"
+        case startedAt = "started_at"
+        case endedAt = "ended_at"
+        case durationSecs = "duration_secs"
+    }
+
+    public static func == (lhs: AppSession, rhs: AppSession) -> Bool {
+        lhs.id == rhs.id && lhs.userId == rhs.userId &&
+            lhs.startedAt == rhs.startedAt && lhs.endedAt == rhs.endedAt &&
+            lhs.durationSecs == rhs.durationSecs
+    }
+}
+
+/// A single buffered mutation the client is replaying. Mirrors
+/// `sdks/core/src/sync.rs::SyncChange` field-for-field.
+public struct SyncChange: Codable, Equatable {
+    public let entityType: String
+    public let entityId: String
+    /// One of `"insert"`, `"update"`, `"delete"`.
+    public let action: String
+    public let data: AnyEncodableDecodable?
+    /// Client-side ISO-8601 timestamp captured when the mutation occurred.
+    public let clientTimestamp: String
+
+    public init(
+        entityType: String,
+        entityId: String,
+        action: String,
+        data: AnyEncodableDecodable? = nil,
+        clientTimestamp: String
+    ) {
+        self.entityType = entityType
+        self.entityId = entityId
+        self.action = action
+        self.data = data
+        self.clientTimestamp = clientTimestamp
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case action, data
+        case entityType = "entity_type"
+        case entityId = "entity_id"
+        case clientTimestamp = "client_timestamp"
+    }
+
+    public static func == (lhs: SyncChange, rhs: SyncChange) -> Bool {
+        lhs.entityType == rhs.entityType && lhs.entityId == rhs.entityId &&
+            lhs.action == rhs.action && lhs.clientTimestamp == rhs.clientTimestamp
+    }
+}
+
+/// Per-row conflict surfaced by `sync.pushChanges`. `resolution` is
+/// always `"server_wins"` today.
+public struct SyncConflict: Codable, Equatable {
+    public let entityType: String
+    public let entityId: String
+    public let resolution: String
+    public let serverData: AnyDecodable?
+
+    enum CodingKeys: String, CodingKey {
+        case resolution
+        case entityType = "entity_type"
+        case entityId = "entity_id"
+        case serverData = "server_data"
+    }
+
+    public static func == (lhs: SyncConflict, rhs: SyncConflict) -> Bool {
+        lhs.entityType == rhs.entityType && lhs.entityId == rhs.entityId &&
+            lhs.resolution == rhs.resolution
+    }
+}
+
+/// Reply from `sync.pushChanges`. `applied` is the count the server
+/// accepted; `conflicts` carries any server-wins resolutions; the
+/// `checkpointToken` is the opaque cursor to pass to the next
+/// `pullChanges` call.
+public struct PushChangesResult: Codable, Equatable {
+    public let applied: UInt32
+    public let conflicts: [SyncConflict]
+    public let checkpointToken: String
+
+    enum CodingKeys: String, CodingKey {
+        case applied, conflicts
+        case checkpointToken = "checkpoint_token"
+    }
+}
+
+/// Reply from `sync.pullChanges`. `changes` is the batch of remote-origin
+/// mutations the caller should apply to their local cache.
+public struct PullChangesResult: Codable, Equatable {
+    public let changes: [SyncChange]
+    public let checkpointToken: String
+    public let hasMore: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case changes
+        case checkpointToken = "checkpoint_token"
+        case hasMore = "has_more"
+    }
+}
+
+/// Cursor input to `sync.pullChanges`. `entityType` is required; the
+/// optional `checkpointToken` is omitted on the first pull.
+public struct PullSince: Codable, Equatable {
+    public let entityType: String
+    public let checkpointToken: String?
+
+    public init(entityType: String, checkpointToken: String? = nil) {
+        self.entityType = entityType
+        self.checkpointToken = checkpointToken
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case entityType = "entity_type"
+        case checkpointToken = "checkpoint_token"
+    }
+}
+
+/// Current user's weekly league standing. `cohort` / `league` / `rank`
+/// are `nil` until the user's first Monday cohort assignment runs.
+public struct LeagueMembership: Codable, Equatable {
+    public let cohort: LeagueCohort?
+    public let league: LeagueTier?
+    public let rank: UInt32?
+    public let score: Int64
+    public let memberCount: UInt32
+
+    enum CodingKeys: String, CodingKey {
+        case cohort, league, rank, score
+        case memberCount = "member_count"
+    }
+}
+
+/// Cohort metadata the user currently belongs to.
+public struct LeagueCohort: Codable, Equatable {
+    public let id: String
+    public let leagueId: String
+    /// ISO-8601 date (`YYYY-MM-DD`) — the Monday that opens the cohort's
+    /// 7-day window. Kept as a String because Swift's default Date
+    /// decoder expects ISO-8601 timestamps, not bare dates.
+    public let weekStart: String
+    /// Server-side lifecycle: `"active"`, `"settling"`, `"closed"`.
+    public let status: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, status
+        case leagueId = "league_id"
+        case weekStart = "week_start"
+    }
+}
+
+/// League tier metadata. `tierOrder` ascends from bottom tier (1) upward.
+public struct LeagueTier: Codable, Equatable {
+    public let id: String
+    public let name: String
+    public let tierOrder: Int32
+
+    enum CodingKeys: String, CodingKey {
+        case id, name
+        case tierOrder = "tier_order"
+    }
+}
+
+/// Anonymised cohort member returned by `leagues.cohort()`. Notably no
+/// `userId` — only the user-picked `displayName` is exposed.
+public struct LeagueCohortMember: Codable, Equatable {
+    public let displayName: String?
+    public let score: Int64
+    public let rank: UInt32
+
+    enum CodingKeys: String, CodingKey {
+        case score, rank
+        case displayName = "display_name"
+    }
+}
+
+/// Reply from `leagues.cohort()`. `cohort` / `league` are `nil` for users
+/// not yet assigned to a cohort.
+public struct LeagueCohortResponse: Codable, Equatable {
+    public let cohort: LeagueCohort?
+    public let league: LeagueTier?
+    public let members: [LeagueCohortMember]
+}
+
+/// Summary row returned by `storage.list()`. Subset of `MediaAssetFfi` —
+/// the server omits `width` / `height` / `retentionDays` on the list
+/// endpoint to keep the response cheap.
+public struct MediaAssetSummary: Codable, Equatable {
+    public let id: String
+    public let bucket: String
+    public let key: String
+    public let url: String
+    public let mimeType: String
+    public let sizeBytes: UInt64
+    public let createdAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case id, bucket, key, url
+        case mimeType = "mime_type"
+        case sizeBytes = "size_bytes"
+        case createdAt = "created_at"
+    }
+}
+
+/// Internal wrapper for the `storage.list` JSON envelope. Server returns
+/// `{ "data": [MediaAssetSummary, …] }`.
+struct StorageListResponse: Decodable {
+    let data: [MediaAssetSummary]
+}
+
+/// Internal wrapper for `collections.findNearest` — server returns
+/// `{ "data": [row, …] }` where each row decodes to the caller's `T`.
+struct NearestResponse<T: Decodable>: Decodable {
+    let data: [T]
+}
+
+/// Internal wrapper for `collections.count` — server returns
+/// `{ "data": { "count": N } }`.
+struct CountResponse: Decodable {
+    let data: CountInner
+    struct CountInner: Decodable {
+        let count: UInt64
+    }
+}
+
+/// Options for `collections.findNearest`. Wire shape matches
+/// `sdks/core/src/collections.rs::NearestOptions`.
+struct NearestOptions: Encodable {
+    let vectorField: String
+    let queryVector: [Float]
+    let k: UInt32
+    let filter: AnyEncodable?
+
+    enum CodingKeys: String, CodingKey {
+        case k, filter
+        case vectorField = "vector_field"
+        case queryVector = "query_vector"
+    }
+}
 
 // MARK: - Gamification types
 
@@ -2524,7 +3151,7 @@ public struct OnboardingStatus: Codable, Equatable {
 // MARK: - Push extension types
 
 /// JSON-decoded push token row returned by `Amba.push.getTokens()`.
-/// Distinct from the UniFFI-generated `PushTokenFfi` (which is what
+/// Distinct from the engine-typed `PushTokenFfi` (which is what
 /// `register()` returns) — `getTokens` goes through the JSON-string
 /// path so the wire shape lands in a Codable struct.
 public struct PushToken: Codable, Equatable {
