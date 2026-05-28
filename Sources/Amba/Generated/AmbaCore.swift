@@ -685,6 +685,13 @@ public protocol AmbaCoreFfiProtocol: AnyObject {
     func me() async throws -> UserFfi
 
     /**
+     * `POST /v1/client/messaging/conversations/:id/participants` — add a
+     * participant. The caller must already be a member (the server
+     * enforces `NOT_A_PARTICIPANT`); idempotent server-side.
+     */
+    func messagingAddParticipant(conversationId: String, userId: String) async throws -> String
+
+    /**
      * `POST /v1/client/messaging/conversations` — see
      * [`crate::messaging::MessagingModule::create_conversation`].
      */
@@ -2011,6 +2018,28 @@ open class AmbaCoreFfi:
                 completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
                 freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
                 liftFunc: FfiConverterTypeUserFfi.lift,
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
+    /**
+     * `POST /v1/client/messaging/conversations/:id/participants` — add a
+     * participant. The caller must already be a member (the server
+     * enforces `NOT_A_PARTICIPANT`); idempotent server-side.
+     */
+    open func messagingAddParticipant(conversationId: String, userId: String) async throws -> String {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_messaging_add_participant(
+                        self.uniffiClonePointer(),
+                        FfiConverterString.lower(conversationId), FfiConverterString.lower(userId)
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
+                completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
+                freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
+                liftFunc: FfiConverterString.lift,
                 errorHandler: FfiConverterTypeAmbaCoreError.lift
             )
     }
@@ -4764,6 +4793,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_amba_core_checksum_method_ambacoreffi_me() != 38244 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_amba_core_checksum_method_ambacoreffi_messaging_add_participant() != 21952 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_amba_core_checksum_method_ambacoreffi_messaging_create_conversation() != 1020 {

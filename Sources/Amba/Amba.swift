@@ -969,6 +969,21 @@ public final class AmbaClient {
             let json = try await core.messagingSendMessage(requestJson: requestJson)
             return try Amba.decodeJSON(Message.self, from: json)
         }
+        /// NEW in 4.0. Add `userId` as a participant of `conversationId`.
+        /// The caller must already be a participant; the add is idempotent
+        /// server-side, so re-adding an existing member returns the
+        /// existing row. Enables dynamic membership growth — circles whose
+        /// participants qualify over time.
+        public func addParticipant(
+            conversationId: String,
+            userId: String
+        ) async throws -> ConversationParticipant {
+            let json = try await core.messagingAddParticipant(
+                conversationId: conversationId,
+                userId: userId
+            )
+            return try Amba.decodeJSON(ConversationParticipant.self, from: json)
+        }
     }
 
     public final class Moderation {
@@ -1707,6 +1722,15 @@ public enum Amba {
         public static func sendMessage(_ request: SendMessageRequest) async throws -> Message {
             try await Amba.requireClient().messaging.sendMessage(request)
         }
+        public static func addParticipant(
+            conversationId: String,
+            userId: String
+        ) async throws -> ConversationParticipant {
+            try await Amba.requireClient().messaging.addParticipant(
+                conversationId: conversationId,
+                userId: userId
+            )
+        }
     }
 
     public enum moderation {
@@ -2057,7 +2081,7 @@ extension JSONEncoder {
     }()
 }
 
-public let SDK_VERSION = "4.0.2"
+public let SDK_VERSION = "4.0.3"
 
 // MARK: - SDK 4.0 NEW types (sessions / sync / leagues / storage / collections)
 
@@ -2851,6 +2875,25 @@ public struct Conversation: Codable, Equatable {
         case lastMessage = "last_message"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+    }
+}
+
+/// A `conversation_participants` row — returned by
+/// `Amba.messaging.addParticipant`. All fields are optional so older
+/// servers that trim columns still decode.
+public struct ConversationParticipant: Codable, Equatable {
+    public let id: String?
+    public let conversationId: String?
+    public let appUserId: String?
+    public let joinedAt: Date?
+    public let lastReadAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case conversationId = "conversation_id"
+        case appUserId = "app_user_id"
+        case joinedAt = "joined_at"
+        case lastReadAt = "last_read_at"
     }
 }
 

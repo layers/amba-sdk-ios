@@ -554,6 +554,12 @@ final class MockAmbaCore: AmbaCoreFfiProtocol, @unchecked Sendable {
         messagingMarkReadCalls.append(conversationId)
         return nextMessagingMarkReadJson
     }
+    var messagingAddParticipantCalls: [(conversationId: String, userId: String)] = []
+    var nextMessagingAddParticipantJson: String = "{}"
+    func messagingAddParticipant(conversationId: String, userId: String) async throws -> String {
+        messagingAddParticipantCalls.append((conversationId, userId))
+        return nextMessagingAddParticipantJson
+    }
 
     var moderationReportUserCalls: [String] = []
     var moderationReportContentCalls: [String] = []
