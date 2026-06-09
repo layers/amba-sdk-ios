@@ -446,6 +446,22 @@ private struct FfiConverterUInt64: FfiConverterPrimitive {
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
+private struct FfiConverterInt64: FfiConverterPrimitive {
+    typealias FfiType = Int64
+    typealias SwiftType = Int64
+
+    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Int64 {
+        return try lift(readInt(&buf))
+    }
+
+    static func write(_ value: Int64, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
 private struct FfiConverterBool: FfiConverter {
     typealias FfiType = Int8
     typealias SwiftType = Bool
@@ -607,6 +623,13 @@ public protocol AmbaCoreFfiProtocol: AnyObject {
 
     func entitlementsList() async throws -> [UserEntitlementFfi]
 
+    /**
+     * Restore purchases — re-sync the user's owned entitlements from the
+     * validation engine and return the active set. Fail-closed: an upstream
+     * failure returns `Err` (access unchanged), never a silent unlock.
+     */
+    func entitlementsRestore() async throws -> RestoreResultFfi
+
     func feedsGetActivity(feed: String?, cursor: String?) async throws -> String
 
     func flagsFetch() async throws -> [FlagAssignmentFfi]
@@ -731,6 +754,17 @@ public protocol AmbaCoreFfiProtocol: AnyObject {
     func moderationReportContent(requestJson: String) async throws -> String
 
     func moderationReportUser(requestJson: String) async throws -> String
+
+    /**
+     * Fetch one offering by id (same shape as `offerings_list`).
+     */
+    func offeringsGet(offeringId: String) async throws -> OfferingsDataFfi
+
+    /**
+     * Fetch all offerings (with packages + products). Provider-neutral.
+     * Typed Record (no JSON-string round-trip on the native side).
+     */
+    func offeringsList() async throws -> OfferingsDataFfi
 
     func onboardingComplete() async throws -> String
 
@@ -1449,6 +1483,27 @@ open class AmbaCoreFfi:
                 completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
                 freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
                 liftFunc: FfiConverterSequenceTypeUserEntitlementFfi.lift,
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
+    /**
+     * Restore purchases — re-sync the user's owned entitlements from the
+     * validation engine and return the active set. Fail-closed: an upstream
+     * failure returns `Err` (access unchanged), never a silent unlock.
+     */
+    open func entitlementsRestore() async throws -> RestoreResultFfi {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_entitlements_restore(
+                        self.uniffiClonePointer()
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
+                completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
+                freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
+                liftFunc: FfiConverterTypeRestoreResultFfi.lift,
                 errorHandler: FfiConverterTypeAmbaCoreError.lift
             )
     }
@@ -2215,6 +2270,46 @@ open class AmbaCoreFfi:
                 completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
                 freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
                 liftFunc: FfiConverterString.lift,
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
+    /**
+     * Fetch one offering by id (same shape as `offerings_list`).
+     */
+    open func offeringsGet(offeringId: String) async throws -> OfferingsDataFfi {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_offerings_get(
+                        self.uniffiClonePointer(),
+                        FfiConverterString.lower(offeringId)
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
+                completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
+                freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
+                liftFunc: FfiConverterTypeOfferingsDataFfi.lift,
+                errorHandler: FfiConverterTypeAmbaCoreError.lift
+            )
+    }
+
+    /**
+     * Fetch all offerings (with packages + products). Provider-neutral.
+     * Typed Record (no JSON-string round-trip on the native side).
+     */
+    open func offeringsList() async throws -> OfferingsDataFfi {
+        return
+            try await uniffiRustCallAsync(
+                rustFutureFunc: {
+                    uniffi_amba_core_fn_method_ambacoreffi_offerings_list(
+                        self.uniffiClonePointer()
+                    )
+                },
+                pollFunc: ffi_amba_core_rust_future_poll_rust_buffer,
+                completeFunc: ffi_amba_core_rust_future_complete_rust_buffer,
+                freeFunc: ffi_amba_core_rust_future_free_rust_buffer,
+                liftFunc: FfiConverterTypeOfferingsDataFfi.lift,
                 errorHandler: FfiConverterTypeAmbaCoreError.lift
             )
     }
@@ -3709,6 +3804,367 @@ public func FfiConverterTypeMediaAssetFfi_lower(_ value: MediaAssetFfi) -> RustB
     return FfiConverterTypeMediaAssetFfi.lower(value)
 }
 
+public struct OfferingFfi {
+    public let offeringId: String
+    public let displayName: String?
+    public let description: String?
+    public let current: Bool
+    /**
+     * Free-form offering metadata, JSON-encoded.
+     */
+    public let metadataJson: String
+    public let packages: [OfferingPackageFfi]
+
+    /// Default memberwise initializers are never public by default, so we
+    /// declare one manually.
+    public init(offeringId: String, displayName: String?, description: String?, current: Bool,
+                /* 
+                    * Free-form offering metadata, JSON-encoded.
+                    */ metadataJson: String, packages: [OfferingPackageFfi])
+    {
+        self.offeringId = offeringId
+        self.displayName = displayName
+        self.description = description
+        self.current = current
+        self.metadataJson = metadataJson
+        self.packages = packages
+    }
+}
+
+extension OfferingFfi: Equatable, Hashable {
+    public static func == (lhs: OfferingFfi, rhs: OfferingFfi) -> Bool {
+        if lhs.offeringId != rhs.offeringId {
+            return false
+        }
+        if lhs.displayName != rhs.displayName {
+            return false
+        }
+        if lhs.description != rhs.description {
+            return false
+        }
+        if lhs.current != rhs.current {
+            return false
+        }
+        if lhs.metadataJson != rhs.metadataJson {
+            return false
+        }
+        if lhs.packages != rhs.packages {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(offeringId)
+        hasher.combine(displayName)
+        hasher.combine(description)
+        hasher.combine(current)
+        hasher.combine(metadataJson)
+        hasher.combine(packages)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeOfferingFfi: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> OfferingFfi {
+        return
+            try OfferingFfi(
+                offeringId: FfiConverterString.read(from: &buf),
+                displayName: FfiConverterOptionString.read(from: &buf),
+                description: FfiConverterOptionString.read(from: &buf),
+                current: FfiConverterBool.read(from: &buf),
+                metadataJson: FfiConverterString.read(from: &buf),
+                packages: FfiConverterSequenceTypeOfferingPackageFfi.read(from: &buf)
+            )
+    }
+
+    public static func write(_ value: OfferingFfi, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.offeringId, into: &buf)
+        FfiConverterOptionString.write(value.displayName, into: &buf)
+        FfiConverterOptionString.write(value.description, into: &buf)
+        FfiConverterBool.write(value.current, into: &buf)
+        FfiConverterString.write(value.metadataJson, into: &buf)
+        FfiConverterSequenceTypeOfferingPackageFfi.write(value.packages, into: &buf)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOfferingFfi_lift(_ buf: RustBuffer) throws -> OfferingFfi {
+    return try FfiConverterTypeOfferingFfi.lift(buf)
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOfferingFfi_lower(_ value: OfferingFfi) -> RustBuffer {
+    return FfiConverterTypeOfferingFfi.lower(value)
+}
+
+public struct OfferingPackageFfi {
+    public let packageId: String
+    public let position: Int64
+    /**
+     * Free-form package metadata, JSON-encoded.
+     */
+    public let metadataJson: String
+    public let product: OfferingProductFfi?
+
+    /// Default memberwise initializers are never public by default, so we
+    /// declare one manually.
+    public init(packageId: String, position: Int64,
+                /* 
+                    * Free-form package metadata, JSON-encoded.
+                    */ metadataJson: String, product: OfferingProductFfi?)
+    {
+        self.packageId = packageId
+        self.position = position
+        self.metadataJson = metadataJson
+        self.product = product
+    }
+}
+
+extension OfferingPackageFfi: Equatable, Hashable {
+    public static func == (lhs: OfferingPackageFfi, rhs: OfferingPackageFfi) -> Bool {
+        if lhs.packageId != rhs.packageId {
+            return false
+        }
+        if lhs.position != rhs.position {
+            return false
+        }
+        if lhs.metadataJson != rhs.metadataJson {
+            return false
+        }
+        if lhs.product != rhs.product {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(packageId)
+        hasher.combine(position)
+        hasher.combine(metadataJson)
+        hasher.combine(product)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeOfferingPackageFfi: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> OfferingPackageFfi {
+        return
+            try OfferingPackageFfi(
+                packageId: FfiConverterString.read(from: &buf),
+                position: FfiConverterInt64.read(from: &buf),
+                metadataJson: FfiConverterString.read(from: &buf),
+                product: FfiConverterOptionTypeOfferingProductFfi.read(from: &buf)
+            )
+    }
+
+    public static func write(_ value: OfferingPackageFfi, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.packageId, into: &buf)
+        FfiConverterInt64.write(value.position, into: &buf)
+        FfiConverterString.write(value.metadataJson, into: &buf)
+        FfiConverterOptionTypeOfferingProductFfi.write(value.product, into: &buf)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOfferingPackageFfi_lift(_ buf: RustBuffer) throws -> OfferingPackageFfi {
+    return try FfiConverterTypeOfferingPackageFfi.lift(buf)
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOfferingPackageFfi_lower(_ value: OfferingPackageFfi) -> RustBuffer {
+    return FfiConverterTypeOfferingPackageFfi.lower(value)
+}
+
+public struct OfferingProductFfi {
+    public let productId: String
+    public let displayName: String?
+    public let description: String?
+    public let productType: String?
+    /**
+     * Map of neutral store id → that store's product id, JSON-encoded.
+     */
+    public let storeProductRefsJson: String
+    public let grantsEntitlementId: String?
+    public let trialPeriodDays: Int64?
+    public let duration: String?
+
+    /// Default memberwise initializers are never public by default, so we
+    /// declare one manually.
+    public init(productId: String, displayName: String?, description: String?, productType: String?,
+                /* 
+                    * Map of neutral store id → that store's product id, JSON-encoded.
+                    */ storeProductRefsJson: String, grantsEntitlementId: String?, trialPeriodDays: Int64?, duration: String?)
+    {
+        self.productId = productId
+        self.displayName = displayName
+        self.description = description
+        self.productType = productType
+        self.storeProductRefsJson = storeProductRefsJson
+        self.grantsEntitlementId = grantsEntitlementId
+        self.trialPeriodDays = trialPeriodDays
+        self.duration = duration
+    }
+}
+
+extension OfferingProductFfi: Equatable, Hashable {
+    public static func == (lhs: OfferingProductFfi, rhs: OfferingProductFfi) -> Bool {
+        if lhs.productId != rhs.productId {
+            return false
+        }
+        if lhs.displayName != rhs.displayName {
+            return false
+        }
+        if lhs.description != rhs.description {
+            return false
+        }
+        if lhs.productType != rhs.productType {
+            return false
+        }
+        if lhs.storeProductRefsJson != rhs.storeProductRefsJson {
+            return false
+        }
+        if lhs.grantsEntitlementId != rhs.grantsEntitlementId {
+            return false
+        }
+        if lhs.trialPeriodDays != rhs.trialPeriodDays {
+            return false
+        }
+        if lhs.duration != rhs.duration {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(productId)
+        hasher.combine(displayName)
+        hasher.combine(description)
+        hasher.combine(productType)
+        hasher.combine(storeProductRefsJson)
+        hasher.combine(grantsEntitlementId)
+        hasher.combine(trialPeriodDays)
+        hasher.combine(duration)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeOfferingProductFfi: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> OfferingProductFfi {
+        return
+            try OfferingProductFfi(
+                productId: FfiConverterString.read(from: &buf),
+                displayName: FfiConverterOptionString.read(from: &buf),
+                description: FfiConverterOptionString.read(from: &buf),
+                productType: FfiConverterOptionString.read(from: &buf),
+                storeProductRefsJson: FfiConverterString.read(from: &buf),
+                grantsEntitlementId: FfiConverterOptionString.read(from: &buf),
+                trialPeriodDays: FfiConverterOptionInt64.read(from: &buf),
+                duration: FfiConverterOptionString.read(from: &buf)
+            )
+    }
+
+    public static func write(_ value: OfferingProductFfi, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.productId, into: &buf)
+        FfiConverterOptionString.write(value.displayName, into: &buf)
+        FfiConverterOptionString.write(value.description, into: &buf)
+        FfiConverterOptionString.write(value.productType, into: &buf)
+        FfiConverterString.write(value.storeProductRefsJson, into: &buf)
+        FfiConverterOptionString.write(value.grantsEntitlementId, into: &buf)
+        FfiConverterOptionInt64.write(value.trialPeriodDays, into: &buf)
+        FfiConverterOptionString.write(value.duration, into: &buf)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOfferingProductFfi_lift(_ buf: RustBuffer) throws -> OfferingProductFfi {
+    return try FfiConverterTypeOfferingProductFfi.lift(buf)
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOfferingProductFfi_lower(_ value: OfferingProductFfi) -> RustBuffer {
+    return FfiConverterTypeOfferingProductFfi.lower(value)
+}
+
+public struct OfferingsDataFfi {
+    public let offerings: [OfferingFfi]
+    public let currentOfferingId: String?
+
+    /// Default memberwise initializers are never public by default, so we
+    /// declare one manually.
+    public init(offerings: [OfferingFfi], currentOfferingId: String?) {
+        self.offerings = offerings
+        self.currentOfferingId = currentOfferingId
+    }
+}
+
+extension OfferingsDataFfi: Equatable, Hashable {
+    public static func == (lhs: OfferingsDataFfi, rhs: OfferingsDataFfi) -> Bool {
+        if lhs.offerings != rhs.offerings {
+            return false
+        }
+        if lhs.currentOfferingId != rhs.currentOfferingId {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(offerings)
+        hasher.combine(currentOfferingId)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeOfferingsDataFfi: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> OfferingsDataFfi {
+        return
+            try OfferingsDataFfi(
+                offerings: FfiConverterSequenceTypeOfferingFfi.read(from: &buf),
+                currentOfferingId: FfiConverterOptionString.read(from: &buf)
+            )
+    }
+
+    public static func write(_ value: OfferingsDataFfi, into buf: inout [UInt8]) {
+        FfiConverterSequenceTypeOfferingFfi.write(value.offerings, into: &buf)
+        FfiConverterOptionString.write(value.currentOfferingId, into: &buf)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOfferingsDataFfi_lift(_ buf: RustBuffer) throws -> OfferingsDataFfi {
+    return try FfiConverterTypeOfferingsDataFfi.lift(buf)
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOfferingsDataFfi_lower(_ value: OfferingsDataFfi) -> RustBuffer {
+    return FfiConverterTypeOfferingsDataFfi.lower(value)
+}
+
 public struct PresignDataFfi {
     public let uploadId: String
     public let uploadUrl: String
@@ -3871,62 +4327,123 @@ public func FfiConverterTypePushTokenFfi_lower(_ value: PushTokenFfi) -> RustBuf
     return FfiConverterTypePushTokenFfi.lower(value)
 }
 
-public struct UserEntitlementFfi {
-    public let id: String
-    public let name: String
-    public let isActive: Bool
-    public let source: String
-    public let expiresAt: String?
-    public let grantedAt: String?
-    public let metadataJson: String
+public struct RestoreResultFfi {
+    public let restoredCount: UInt32
+    public let entitlements: [UserEntitlementFfi]
 
     /// Default memberwise initializers are never public by default, so we
     /// declare one manually.
-    public init(id: String, name: String, isActive: Bool, source: String, expiresAt: String?, grantedAt: String?, metadataJson: String) {
-        self.id = id
-        self.name = name
-        self.isActive = isActive
-        self.source = source
-        self.expiresAt = expiresAt
-        self.grantedAt = grantedAt
-        self.metadataJson = metadataJson
+    public init(restoredCount: UInt32, entitlements: [UserEntitlementFfi]) {
+        self.restoredCount = restoredCount
+        self.entitlements = entitlements
     }
 }
 
-extension UserEntitlementFfi: Equatable, Hashable {
-    public static func == (lhs: UserEntitlementFfi, rhs: UserEntitlementFfi) -> Bool {
-        if lhs.id != rhs.id {
+extension RestoreResultFfi: Equatable, Hashable {
+    public static func == (lhs: RestoreResultFfi, rhs: RestoreResultFfi) -> Bool {
+        if lhs.restoredCount != rhs.restoredCount {
             return false
         }
-        if lhs.name != rhs.name {
-            return false
-        }
-        if lhs.isActive != rhs.isActive {
-            return false
-        }
-        if lhs.source != rhs.source {
-            return false
-        }
-        if lhs.expiresAt != rhs.expiresAt {
-            return false
-        }
-        if lhs.grantedAt != rhs.grantedAt {
-            return false
-        }
-        if lhs.metadataJson != rhs.metadataJson {
+        if lhs.entitlements != rhs.entitlements {
             return false
         }
         return true
     }
 
     public func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-        hasher.combine(name)
+        hasher.combine(restoredCount)
+        hasher.combine(entitlements)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRestoreResultFfi: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RestoreResultFfi {
+        return
+            try RestoreResultFfi(
+                restoredCount: FfiConverterUInt32.read(from: &buf),
+                entitlements: FfiConverterSequenceTypeUserEntitlementFfi.read(from: &buf)
+            )
+    }
+
+    public static func write(_ value: RestoreResultFfi, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.restoredCount, into: &buf)
+        FfiConverterSequenceTypeUserEntitlementFfi.write(value.entitlements, into: &buf)
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRestoreResultFfi_lift(_ buf: RustBuffer) throws -> RestoreResultFfi {
+    return try FfiConverterTypeRestoreResultFfi.lift(buf)
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRestoreResultFfi_lower(_ value: RestoreResultFfi) -> RustBuffer {
+    return FfiConverterTypeRestoreResultFfi.lower(value)
+}
+
+public struct UserEntitlementFfi {
+    public let entitlementId: String
+    public let isActive: Bool
+    public let productId: String?
+    public let store: String?
+    public let purchaseDate: String?
+    public let expirationDate: String?
+    public let periodType: String?
+
+    /// Default memberwise initializers are never public by default, so we
+    /// declare one manually.
+    public init(entitlementId: String, isActive: Bool, productId: String?, store: String?, purchaseDate: String?, expirationDate: String?, periodType: String?) {
+        self.entitlementId = entitlementId
+        self.isActive = isActive
+        self.productId = productId
+        self.store = store
+        self.purchaseDate = purchaseDate
+        self.expirationDate = expirationDate
+        self.periodType = periodType
+    }
+}
+
+extension UserEntitlementFfi: Equatable, Hashable {
+    public static func == (lhs: UserEntitlementFfi, rhs: UserEntitlementFfi) -> Bool {
+        if lhs.entitlementId != rhs.entitlementId {
+            return false
+        }
+        if lhs.isActive != rhs.isActive {
+            return false
+        }
+        if lhs.productId != rhs.productId {
+            return false
+        }
+        if lhs.store != rhs.store {
+            return false
+        }
+        if lhs.purchaseDate != rhs.purchaseDate {
+            return false
+        }
+        if lhs.expirationDate != rhs.expirationDate {
+            return false
+        }
+        if lhs.periodType != rhs.periodType {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(entitlementId)
         hasher.combine(isActive)
-        hasher.combine(source)
-        hasher.combine(expiresAt)
-        hasher.combine(grantedAt)
-        hasher.combine(metadataJson)
+        hasher.combine(productId)
+        hasher.combine(store)
+        hasher.combine(purchaseDate)
+        hasher.combine(expirationDate)
+        hasher.combine(periodType)
     }
 }
 
@@ -3937,24 +4454,24 @@ public struct FfiConverterTypeUserEntitlementFfi: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UserEntitlementFfi {
         return
             try UserEntitlementFfi(
-                id: FfiConverterString.read(from: &buf),
-                name: FfiConverterString.read(from: &buf),
+                entitlementId: FfiConverterString.read(from: &buf),
                 isActive: FfiConverterBool.read(from: &buf),
-                source: FfiConverterString.read(from: &buf),
-                expiresAt: FfiConverterOptionString.read(from: &buf),
-                grantedAt: FfiConverterOptionString.read(from: &buf),
-                metadataJson: FfiConverterString.read(from: &buf)
+                productId: FfiConverterOptionString.read(from: &buf),
+                store: FfiConverterOptionString.read(from: &buf),
+                purchaseDate: FfiConverterOptionString.read(from: &buf),
+                expirationDate: FfiConverterOptionString.read(from: &buf),
+                periodType: FfiConverterOptionString.read(from: &buf)
             )
     }
 
     public static func write(_ value: UserEntitlementFfi, into buf: inout [UInt8]) {
-        FfiConverterString.write(value.id, into: &buf)
-        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterString.write(value.entitlementId, into: &buf)
         FfiConverterBool.write(value.isActive, into: &buf)
-        FfiConverterString.write(value.source, into: &buf)
-        FfiConverterOptionString.write(value.expiresAt, into: &buf)
-        FfiConverterOptionString.write(value.grantedAt, into: &buf)
-        FfiConverterString.write(value.metadataJson, into: &buf)
+        FfiConverterOptionString.write(value.productId, into: &buf)
+        FfiConverterOptionString.write(value.store, into: &buf)
+        FfiConverterOptionString.write(value.purchaseDate, into: &buf)
+        FfiConverterOptionString.write(value.expirationDate, into: &buf)
+        FfiConverterOptionString.write(value.periodType, into: &buf)
     }
 }
 
@@ -4340,6 +4857,30 @@ private struct FfiConverterOptionUInt32: FfiConverterRustBuffer {
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
+private struct FfiConverterOptionInt64: FfiConverterRustBuffer {
+    typealias SwiftType = Int64?
+
+    static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterInt64.write(value, into: &buf)
+    }
+
+    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterInt64.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
 private struct FfiConverterOptionBool: FfiConverterRustBuffer {
     typealias SwiftType = Bool?
 
@@ -4404,6 +4945,30 @@ private struct FfiConverterOptionTypeFlagAssignmentFfi: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeFlagAssignmentFfi.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+private struct FfiConverterOptionTypeOfferingProductFfi: FfiConverterRustBuffer {
+    typealias SwiftType = OfferingProductFfi?
+
+    static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeOfferingProductFfi.write(value, into: &buf)
+    }
+
+    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeOfferingProductFfi.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -4504,6 +5069,56 @@ private struct FfiConverterSequenceTypeLinkedIdentifierFfi: FfiConverterRustBuff
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             try seq.append(FfiConverterTypeLinkedIdentifierFfi.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+private struct FfiConverterSequenceTypeOfferingFfi: FfiConverterRustBuffer {
+    typealias SwiftType = [OfferingFfi]
+
+    static func write(_ value: [OfferingFfi], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeOfferingFfi.write(item, into: &buf)
+        }
+    }
+
+    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [OfferingFfi] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [OfferingFfi]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            try seq.append(FfiConverterTypeOfferingFfi.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+private struct FfiConverterSequenceTypeOfferingPackageFfi: FfiConverterRustBuffer {
+    typealias SwiftType = [OfferingPackageFfi]
+
+    static func write(_ value: [OfferingPackageFfi], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeOfferingPackageFfi.write(item, into: &buf)
+        }
+    }
+
+    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [OfferingPackageFfi] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [OfferingPackageFfi]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            try seq.append(FfiConverterTypeOfferingPackageFfi.read(from: &buf))
         }
         return seq
     }
@@ -4693,6 +5308,9 @@ private var initializationResult: InitializationResult = {
     if uniffi_amba_core_checksum_method_ambacoreffi_entitlements_list() != 11101 {
         return InitializationResult.apiChecksumMismatch
     }
+    if uniffi_amba_core_checksum_method_ambacoreffi_entitlements_restore() != 20813 {
+        return InitializationResult.apiChecksumMismatch
+    }
     if uniffi_amba_core_checksum_method_ambacoreffi_feeds_get_activity() != 34917 {
         return InitializationResult.apiChecksumMismatch
     }
@@ -4823,6 +5441,12 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_amba_core_checksum_method_ambacoreffi_moderation_report_user() != 57752 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_amba_core_checksum_method_ambacoreffi_offerings_get() != 58995 {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if uniffi_amba_core_checksum_method_ambacoreffi_offerings_list() != 57112 {
         return InitializationResult.apiChecksumMismatch
     }
     if uniffi_amba_core_checksum_method_ambacoreffi_onboarding_complete() != 30141 {

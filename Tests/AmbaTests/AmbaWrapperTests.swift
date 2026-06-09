@@ -47,6 +47,8 @@ final class MockAmbaCore: AmbaCoreFfiProtocol, @unchecked Sendable {
     var refreshSessionCount = 0
     var meCount = 0
     var entitlementsListCount = 0
+    var entitlementsRestoreCount = 0
+    var offeringsListCount = 0
     var flagsFetchCount = 0
     var configFetchCount = 0
 
@@ -126,6 +128,8 @@ final class MockAmbaCore: AmbaCoreFfiProtocol, @unchecked Sendable {
     var nextEntitlements: [UserEntitlementFfi] = []
     var nextFlags: [FlagAssignmentFfi] = []
     var nextEntitlementsHas: Bool = false
+    var nextRestoreResult: RestoreResultFfi = RestoreResultFfi(restoredCount: 0, entitlements: [])
+    var nextOfferings: OfferingsDataFfi = OfferingsDataFfi(offerings: [], currentOfferingId: nil)
 
     // Error hooks — set non-nil to make the corresponding method throw.
     var trackError: Error?
@@ -173,6 +177,19 @@ final class MockAmbaCore: AmbaCoreFfiProtocol, @unchecked Sendable {
     func entitlementsList() async throws -> [UserEntitlementFfi] {
         entitlementsListCount += 1
         return nextEntitlements
+    }
+    func entitlementsRestore() async throws -> RestoreResultFfi {
+        entitlementsRestoreCount += 1
+        return nextRestoreResult
+    }
+    var offeringsGetCalls: [String] = []
+    func offeringsList() async throws -> OfferingsDataFfi {
+        offeringsListCount += 1
+        return nextOfferings
+    }
+    func offeringsGet(offeringId: String) async throws -> OfferingsDataFfi {
+        offeringsGetCalls.append(offeringId)
+        return nextOfferings
     }
     func flagsFetch() async throws -> [FlagAssignmentFfi] {
         flagsFetchCount += 1
@@ -1328,10 +1345,11 @@ final class AmbaClientTests: XCTestCase {
 
     // 28. entitlements.list returns mock list
     func testEntitlementsList() async throws {
-        mock.nextEntitlements = [UserEntitlementFfi(id: "e-1", name: "pro", isActive: true, source: "rc", expiresAt: nil, grantedAt: nil, metadataJson: "{}")]
+        mock.nextEntitlements = [UserEntitlementFfi(entitlementId: "pro", isActive: true, productId: "com.app.pro.monthly", store: "app_store", purchaseDate: nil, expirationDate: nil, periodType: "normal")]
         let ents = try await client.entitlements.list()
         XCTAssertEqual(ents.count, 1)
-        XCTAssertEqual(ents[0].name, "pro")
+        XCTAssertEqual(ents[0].entitlementId, "pro")
+        XCTAssertEqual(ents[0].store, "app_store")
     }
 
     // 29. entitlements.has — true and missing both

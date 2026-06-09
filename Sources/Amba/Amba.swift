@@ -146,6 +146,20 @@ public final class AmbaClient {
     public var isAuthenticated: Bool { core.isAuthenticated() }
     public func setDebug(_ enabled: Bool) { core.setDebug(enabled: enabled) }
 
+    // ── offerings ─────────────────────────────────────────────────────
+
+    // <generated:offerings>
+    /// Subscription offerings — the packages your paywall renders,
+    /// provider-neutral. Pass an `offeringId` for one offering; omit it
+    /// for all. Returns a typed value (no JSON-string round-trip).
+    public func offerings(_ offeringId: String? = nil) async throws -> OfferingsDataFfi {
+        if let offeringId {
+            return try await core.offeringsGet(offeringId: offeringId)
+        }
+        return try await core.offeringsList()
+    }
+    // </generated:offerings>
+
     // ── Namespace classes ─────────────────────────────────────────────
 
     public final class Events {
@@ -358,6 +372,7 @@ public final class AmbaClient {
     public final class Users {
         private let core: AmbaCoreFfiProtocol
         init(core: AmbaCoreFfiProtocol) { self.core = core }
+        // <generated:users>
         /// Fetch a user profile. `userId == nil` resolves to the current
         /// authenticated user (`/v1/client/users/me`). A non-nil `userId`
         /// is reserved for a future server route and surfaces as a
@@ -373,6 +388,7 @@ public final class AmbaClient {
             let patchJson = String(data: data, encoding: .utf8) ?? "{}"
             return try await core.usersUpdate(userId: userId, patchJson: patchJson)
         }
+        // </generated:users>
     }
 
     /// SDK 4.0 — active app-session listing + revocation. Distinct from
@@ -382,6 +398,7 @@ public final class AmbaClient {
     public final class Sessions {
         private let core: AmbaCoreFfiProtocol
         init(core: AmbaCoreFfiProtocol) { self.core = core }
+        // <generated:sessions>
         public func list() async throws -> [AppSession] {
             let json = try await core.sessionsList()
             return try Amba.decodeJSON([AppSession].self, from: json)
@@ -389,6 +406,7 @@ public final class AmbaClient {
         public func revoke(sessionId: String) async throws {
             try await core.sessionsRevoke(sessionId: sessionId)
         }
+        // </generated:sessions>
     }
 
     /// SDK 4.0 — offline change replay. `pushChanges` replays a batch of
@@ -415,6 +433,7 @@ public final class AmbaClient {
     public final class Collections {
         private let core: AmbaCoreFfiProtocol
         init(core: AmbaCoreFfiProtocol) { self.core = core }
+        // <generated:collections.find>
         public func find<T: Decodable>(_ name: String, options: FindOptions = FindOptions(), as type: T.Type = T.self) async throws -> FindResponse<T> {
             let optionsData = try JSONEncoder().encode(options)
             let optionsJson = String(data: optionsData, encoding: .utf8) ?? "{}"
@@ -422,6 +441,7 @@ public final class AmbaClient {
             guard let data = respJson.data(using: .utf8) else { throw AmbaSwiftError.decode("not utf8") }
             return try JSONDecoder.amba.decode(FindResponse<T>.self, from: data)
         }
+        // </generated:collections.find>
         public func findOne<T: Decodable>(_ name: String, id: String, as type: T.Type = T.self) async throws -> T {
             let respJson = try await core.collectionsFindOne(collection: name, id: id)
             guard let data = respJson.data(using: .utf8) else { throw AmbaSwiftError.decode("not utf8") }
@@ -505,6 +525,7 @@ public final class AmbaClient {
             }
             return try await commit(uploadId: pre.uploadId, assetId: pre.assetId)
         }
+        // <generated:storage>
         /// NEW in 4.0. List media assets, optionally narrowed by a key
         /// `prefix` (server-side filter — forward-compatible; the server
         /// currently ignores `prefix` and returns all assets).
@@ -518,6 +539,7 @@ public final class AmbaClient {
         public func delete(assetId: String) async throws {
             try await core.storageDelete(assetId: assetId)
         }
+        // </generated:storage>
         /// NEW in 4.0. Download the asset bytes. Returns `Data` (UniFFI
         /// maps the Rust `Vec<u8>` → Swift `Data` natively, no extra
         /// copy). For very large assets prefer streaming via the asset's
@@ -552,12 +574,25 @@ public final class AmbaClient {
     public final class Entitlements {
         private let core: AmbaCoreFfiProtocol
         init(core: AmbaCoreFfiProtocol) { self.core = core }
+        // <generated:entitlements.list>
         public func list() async throws -> [UserEntitlementFfi] {
             try await core.entitlementsList()
         }
+        // </generated:entitlements.list>
+        // <generated:entitlements.has>
         public func has(_ name: String) async -> Bool {
             await core.entitlementsHas(name: name)
         }
+        // </generated:entitlements.has>
+        // <generated:entitlements.restore>
+        /// Restore purchases — re-sync the user's owned entitlements from
+        /// the server and return the active set. Required for App Store
+        /// review (3.1.1). Throws (access unchanged) if the server can't
+        /// reach the validation engine — surface a retry message.
+        public func restore() async throws -> RestoreResultFfi {
+            try await core.entitlementsRestore()
+        }
+        // </generated:entitlements.restore>
     }
 
     public final class Ai {
@@ -587,16 +622,19 @@ public final class AmbaClient {
     public final class Config {
         private let core: AmbaCoreFfiProtocol
         init(core: AmbaCoreFfiProtocol) { self.core = core }
+        // <generated:config>
         public func fetch() async throws -> ConfigBundle {
             let respJson = try await core.configFetch()
             guard let data = respJson.data(using: .utf8) else { throw AmbaSwiftError.decode("not utf8") }
             return try JSONDecoder.amba.decode(ConfigBundle.self, from: data)
         }
+        // </generated:config>
     }
 
     public final class Flags {
         private let core: AmbaCoreFfiProtocol
         init(core: AmbaCoreFfiProtocol) { self.core = core }
+        // <generated:flags>
         public func fetch() async throws -> [FlagAssignmentFfi] {
             try await core.flagsFetch()
         }
@@ -606,6 +644,7 @@ public final class AmbaClient {
         public func get(key: String) async throws -> FlagAssignmentFfi? {
             try await core.flagsGet(key: key)
         }
+        // </generated:flags>
     }
 
     /// Instance counterpart to the `Amba.diagnostics.ping()` static
@@ -652,6 +691,7 @@ public final class AmbaClient {
     public final class Achievements {
         private let core: AmbaCoreFfiProtocol
         init(core: AmbaCoreFfiProtocol) { self.core = core }
+        // <generated:achievements>
         public func all() async throws -> [Achievement] {
             let json = try await core.achievementsGetAll()
             return try Amba.decodeJSON([Achievement].self, from: json)
@@ -660,11 +700,13 @@ public final class AmbaClient {
             let json = try await core.achievementsGetProgress()
             return try Amba.decodeJSON([AchievementProgress].self, from: json)
         }
+        // </generated:achievements>
     }
 
     public final class Challenges {
         private let core: AmbaCoreFfiProtocol
         init(core: AmbaCoreFfiProtocol) { self.core = core }
+        // <generated:challenges>
         public func active() async throws -> [Challenge] {
             let json = try await core.challengesGetActive()
             return try Amba.decodeJSON([Challenge].self, from: json)
@@ -681,11 +723,13 @@ public final class AmbaClient {
             let json = try await core.challengesClaim(id: id)
             return try Amba.decodeJSON(ChallengeProgress.self, from: json)
         }
+        // </generated:challenges>
     }
 
     public final class Currencies {
         private let core: AmbaCoreFfiProtocol
         init(core: AmbaCoreFfiProtocol) { self.core = core }
+        // <generated:currencies>
         public func balance() async throws -> [CurrencyBalance] {
             let json = try await core.currenciesGetBalance()
             return try Amba.decodeJSON([CurrencyBalance].self, from: json)
@@ -694,11 +738,13 @@ public final class AmbaClient {
             let json = try await core.currenciesGetTransactions(currencyKey: currencyKey)
             return try Amba.decodeJSON([CurrencyTransaction].self, from: json)
         }
+        // </generated:currencies>
     }
 
     public final class Inventory {
         private let core: AmbaCoreFfiProtocol
         init(core: AmbaCoreFfiProtocol) { self.core = core }
+        // <generated:inventory>
         public func items() async throws -> [InventoryItem] {
             let json = try await core.inventoryGetItems()
             return try Amba.decodeJSON([InventoryItem].self, from: json)
@@ -719,11 +765,13 @@ public final class AmbaClient {
             let json = try await core.inventoryConsume(requestJson: requestJson)
             return try Amba.decodeJSON(InventoryItem.self, from: json)
         }
+        // </generated:inventory>
     }
 
     public final class Leaderboards {
         private let core: AmbaCoreFfiProtocol
         init(core: AmbaCoreFfiProtocol) { self.core = core }
+        // <generated:leaderboards>
         public func get(key: String) async throws -> Leaderboard {
             let json = try await core.leaderboardsGet(key: key)
             return try Amba.decodeJSON(Leaderboard.self, from: json)
@@ -736,11 +784,13 @@ public final class AmbaClient {
             let json = try await core.leaderboardsGetMyRank(key: key)
             return try Amba.decodeJSON(LeaderboardEntry.self, from: json)
         }
+        // </generated:leaderboards>
     }
 
     public final class Stores {
         private let core: AmbaCoreFfiProtocol
         init(core: AmbaCoreFfiProtocol) { self.core = core }
+        // <generated:stores>
         public func list() async throws -> [Store] {
             let json = try await core.storesList()
             return try Amba.decodeJSON([Store].self, from: json)
@@ -755,11 +805,13 @@ public final class AmbaClient {
             let json = try await core.storesPurchase(storeKey: storeKey, purchaseOptionId: purchaseOptionId, receiptJson: receiptJson)
             return try Amba.decodeJSON(PurchaseResult.self, from: json)
         }
+        // </generated:stores>
     }
 
     public final class Xp {
         private let core: AmbaCoreFfiProtocol
         init(core: AmbaCoreFfiProtocol) { self.core = core }
+        // <generated:xp>
         public func balance() async throws -> XpBalance {
             let json = try await core.xpGetBalance()
             return try Amba.decodeJSON(XpBalance.self, from: json)
@@ -772,11 +824,13 @@ public final class AmbaClient {
             let json = try await core.xpClaim(grantKey: grantKey)
             return try Amba.decodeJSON(XpTransaction.self, from: json)
         }
+        // </generated:xp>
     }
 
     public final class Streaks {
         private let core: AmbaCoreFfiProtocol
         init(core: AmbaCoreFfiProtocol) { self.core = core }
+        // <generated:streaks>
         public func all() async throws -> [Streak] {
             let json = try await core.streaksGetAll()
             return try Amba.decodeJSON([Streak].self, from: json)
@@ -785,6 +839,7 @@ public final class AmbaClient {
             let json = try await core.streaksQualify(streakKey: streakKey)
             return try Amba.decodeJSON(Streak.self, from: json)
         }
+        // </generated:streaks>
     }
 
     /// SDK 4.0 — weekly tiered leaderboard cohorts. The server rolls every
@@ -793,6 +848,7 @@ public final class AmbaClient {
     public final class Leagues {
         private let core: AmbaCoreFfiProtocol
         init(core: AmbaCoreFfiProtocol) { self.core = core }
+        // <generated:leagues>
         /// Current user's cohort standing — rank, score, cohort metadata.
         /// `cohort` / `league` / `rank` are nil before the user's first
         /// Monday rollover.
@@ -806,6 +862,7 @@ public final class AmbaClient {
             let json = try await core.leaguesCohort()
             return try Amba.decodeJSON(LeagueCohortResponse.self, from: json)
         }
+        // </generated:leagues>
     }
 
     // MARK: - Social namespaces
@@ -813,15 +870,18 @@ public final class AmbaClient {
     public final class Feeds {
         private let core: AmbaCoreFfiProtocol
         init(core: AmbaCoreFfiProtocol) { self.core = core }
+        // <generated:feeds>
         public func activity(feed: String? = nil, cursor: String? = nil) async throws -> FeedResponse {
             let json = try await core.feedsGetActivity(feed: feed, cursor: cursor)
             return try Amba.decodeJSON(FeedResponse.self, from: json)
         }
+        // </generated:feeds>
     }
 
     public final class Friends {
         private let core: AmbaCoreFfiProtocol
         init(core: AmbaCoreFfiProtocol) { self.core = core }
+        // <generated:friends>
         public func list() async throws -> [Friendship] {
             let json = try await core.friendsGetList()
             return try Amba.decodeJSON([Friendship].self, from: json)
@@ -864,11 +924,13 @@ public final class AmbaClient {
         public func removeFriend(userId: String) async throws {
             try await core.friendsRemoveFriend(userId: userId)
         }
+        // </generated:friends>
     }
 
     public final class Groups {
         private let core: AmbaCoreFfiProtocol
         init(core: AmbaCoreFfiProtocol) { self.core = core }
+        // <generated:groups>
         public func create(_ params: GroupCreate) async throws -> Group {
             let data = try JSONEncoder.amba.encode(params)
             let paramsJson = String(data: data, encoding: .utf8) ?? "{}"
@@ -903,11 +965,13 @@ public final class AmbaClient {
             let json = try await core.groupsInvite(id: id, userId: userId)
             return try Amba.decodeJSON(GroupMember.self, from: json)
         }
+        // </generated:groups>
     }
 
     public final class Messaging {
         private let core: AmbaCoreFfiProtocol
         init(core: AmbaCoreFfiProtocol) { self.core = core }
+        // <generated:messaging>
         public func conversations() async throws -> [Conversation] {
             let json = try await core.messagingGetConversations()
             return try Amba.decodeJSON([Conversation].self, from: json)
@@ -984,6 +1048,7 @@ public final class AmbaClient {
             )
             return try Amba.decodeJSON(ConversationParticipant.self, from: json)
         }
+        // </generated:messaging>
     }
 
     public final class Moderation {
@@ -1010,6 +1075,7 @@ public final class AmbaClient {
     public final class Reviews {
         private let core: AmbaCoreFfiProtocol
         init(core: AmbaCoreFfiProtocol) { self.core = core }
+        // <generated:reviews>
         public func list(targetType: String, targetId: String) async throws -> [Review] {
             let json = try await core.reviewsList(targetType: targetType, targetId: targetId)
             return try Amba.decodeJSON([Review].self, from: json)
@@ -1029,11 +1095,13 @@ public final class AmbaClient {
         public func delete(id: String) async throws {
             try await core.reviewsDelete(id: id)
         }
+        // </generated:reviews>
     }
 
     public final class Roles {
         private let core: AmbaCoreFfiProtocol
         init(core: AmbaCoreFfiProtocol) { self.core = core }
+        // <generated:roles>
         public func myRoles() async throws -> [Role] {
             let json = try await core.rolesGetMyRoles()
             return try Amba.decodeJSON([Role].self, from: json)
@@ -1041,11 +1109,13 @@ public final class AmbaClient {
         public func hasPermission(_ permission: String) async throws -> Bool {
             try await core.rolesHasPermission(permission: permission)
         }
+        // </generated:roles>
     }
 
     public final class Referrals {
         private let core: AmbaCoreFfiProtocol
         init(core: AmbaCoreFfiProtocol) { self.core = core }
+        // <generated:referrals>
         public func referralCode() async throws -> ReferralCode {
             let json = try await core.referralsGetReferralCode()
             return try Amba.decodeJSON(ReferralCode.self, from: json)
@@ -1058,6 +1128,7 @@ public final class AmbaClient {
             let json = try await core.referralsCreate(code: code, maxUses: maxUses)
             return try Amba.decodeJSON(ReferralCode.self, from: json)
         }
+        // </generated:referrals>
     }
 
     // MARK: - Lifecycle namespaces
@@ -1065,6 +1136,7 @@ public final class AmbaClient {
     public final class Catalog {
         private let core: AmbaCoreFfiProtocol
         init(core: AmbaCoreFfiProtocol) { self.core = core }
+        // <generated:catalog>
         public func list() async throws -> [CatalogItem] {
             let json = try await core.catalogList()
             return try Amba.decodeJSON([CatalogItem].self, from: json)
@@ -1074,11 +1146,13 @@ public final class AmbaClient {
             let json = try await core.catalogGet(itemId: id)
             return try Amba.decodeJSON(CatalogItem.self, from: json)
         }
+        // </generated:catalog>
     }
 
     public final class Content {
         private let core: AmbaCoreFfiProtocol
         init(core: AmbaCoreFfiProtocol) { self.core = core }
+        // <generated:content>
         /// `channel` is optional; when omitted, the server defaults to `"default"`.
         public func today(channel: String? = nil) async throws -> ContentItem? {
             let json = try await core.contentGetToday(channel: channel)
@@ -1115,15 +1189,18 @@ public final class AmbaClient {
             let json = try await core.contentCreateItem(channel: channel, itemJson: itemJson)
             return try Amba.decodeJSON(ContentItem.self, from: json)
         }
+        // </generated:content>
     }
 
     public final class DeepLinks {
         private let core: AmbaCoreFfiProtocol
         init(core: AmbaCoreFfiProtocol) { self.core = core }
+        // <generated:deepLinks>
         public func get(shortCode: String) async throws -> DeepLink {
             let json = try await core.deepLinksGet(shortCode: shortCode)
             return try Amba.decodeJSON(DeepLink.self, from: json)
         }
+        // </generated:deepLinks>
         public func create(_ params: DeepLinkCreate) async throws -> DeepLink {
             let data = try JSONEncoder.amba.encode(params)
             let paramsJson = String(data: data, encoding: .utf8) ?? "{}"
@@ -1135,6 +1212,7 @@ public final class AmbaClient {
     public final class Onboarding {
         private let core: AmbaCoreFfiProtocol
         init(core: AmbaCoreFfiProtocol) { self.core = core }
+        // <generated:onboarding>
         public func status() async throws -> OnboardingStatus {
             let json = try await core.onboardingGetStatus()
             return try Amba.decodeJSON(OnboardingStatus.self, from: json)
@@ -1153,6 +1231,7 @@ public final class AmbaClient {
             let json = try await core.onboardingComplete()
             return try Amba.decodeJSON(OnboardingStatus.self, from: json)
         }
+        // </generated:onboarding>
     }
 }
 
@@ -1969,9 +2048,14 @@ public struct AiMessageResponse: Decodable {
     public let usage: AiUsage
     public let stopReason: String?
     public let model: String
+    /// Computed USD cost of this call (input + output + cache token rates,
+    /// summed server-side). `nil` when the model isn't in the cost table —
+    /// the call still succeeds; the cost is just unattributed.
+    public let costUsd: Double?
     enum CodingKeys: String, CodingKey {
         case content, usage, model
         case stopReason = "stop_reason"
+        case costUsd = "cost_usd"
     }
 }
 
@@ -2081,7 +2165,7 @@ extension JSONEncoder {
     }()
 }
 
-public let SDK_VERSION = "4.0.3"
+public let SDK_VERSION = "4.1.0"
 
 // MARK: - SDK 4.0 NEW types (sessions / sync / leagues / storage / collections)
 

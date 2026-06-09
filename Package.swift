@@ -31,8 +31,8 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "AmbaCoreFFI",
-            url: "https://github.com/layers/amba-sdk-ios/releases/download/4.0.3/AmbaCoreFFI.xcframework.zip",
-            checksum: "039084619bffd7f4c844168abbc500edf254602b0a11a67868c7c8d51a3f4246"
+            url: "https://github.com/layers/amba-sdk-ios/releases/download/4.1.0/AmbaCoreFFI.xcframework.zip",
+            checksum: "c463ae2b81f8140b946b3fa1214a21663c1fea947ca3196eb3bbc8ddd2fa25ea"
         ),
         .target(
             name: "Amba",
