@@ -1971,18 +1971,72 @@ public struct FindOptions: Encodable {
     public var cursor: String?
     public var select: [String]?
     public var includeDeleted: Bool?
+    /// Eager-load related rows from other collections in the same `find`
+    /// call (kills N+1). See ``IncludeClause``.
+    public var include: [IncludeClause]?
 
-    public init(filter: AnyEncodable? = nil, order: [OrderBy]? = nil, limit: UInt32? = nil, cursor: String? = nil, select: [String]? = nil, includeDeleted: Bool? = nil) {
+    public init(filter: AnyEncodable? = nil, order: [OrderBy]? = nil, limit: UInt32? = nil, cursor: String? = nil, select: [String]? = nil, includeDeleted: Bool? = nil, include: [IncludeClause]? = nil) {
         self.filter = filter
         self.order = order
         self.limit = limit
         self.cursor = cursor
         self.select = select
         self.includeDeleted = includeDeleted
+        self.include = include
     }
     enum CodingKeys: String, CodingKey {
-        case filter, order, limit, cursor, select
+        case filter, order, limit, cursor, select, include
         case includeDeleted = "include_deleted"
+    }
+}
+
+/// Eager-load related rows from another collection in the same `find` call,
+/// avoiding an N+1 round-trip per base row.
+///
+/// belongs-to — each base row's `localKey` column points at the related row:
+///     IncludeClause(collection: "novels", localKey: "novel_id", as: "novel", single: true)
+///     → row.novel = the matching novels row (or null)
+///
+/// has-many — the related collection's `foreignKey` column points back at
+/// the base row's id:
+///     IncludeClause(collection: "chapters", foreignKey: "novel_id", as: "chapters")
+///     → row.chapters = the matching chapters rows (array)
+///
+/// `where` filters the related rows (server where-DSL shape), `select`
+/// projects their columns, and `include` nests further relations (max depth
+/// 3; max 10 clauses total per find). The included collection's own read
+/// policy + soft-delete are honored.
+public struct IncludeClause: Encodable {
+    public var collection: String
+    public var localKey: String?
+    public var foreignKey: String?
+    public var `as`: String
+    public var single: Bool?
+    public var limit: UInt32?
+    public var `where`: AnyEncodable?
+    public var select: [String]?
+    public var include: [IncludeClause]?
+
+    public init(
+        collection: String,
+        localKey: String? = nil,
+        foreignKey: String? = nil,
+        as alias: String,
+        single: Bool? = nil,
+        limit: UInt32? = nil,
+        where filter: AnyEncodable? = nil,
+        select: [String]? = nil,
+        include: [IncludeClause]? = nil
+    ) {
+        self.collection = collection
+        self.localKey = localKey
+        self.foreignKey = foreignKey
+        self.as = alias
+        self.single = single
+        self.limit = limit
+        self.where = filter
+        self.select = select
+        self.include = include
     }
 }
 
@@ -2165,7 +2219,7 @@ extension JSONEncoder {
     }()
 }
 
-public let SDK_VERSION = "4.1.0"
+public let SDK_VERSION = "4.1.1"
 
 // MARK: - SDK 4.0 NEW types (sessions / sync / leagues / storage / collections)
 

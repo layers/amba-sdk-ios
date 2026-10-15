@@ -22,10 +22,27 @@
 # Usage:
 #   cd swift && ./build-xcframework.sh
 #
+# Slice selection:
+#   AMBA_XCFRAMEWORK_SLICES=all   (default) — all four slices above.
+#   AMBA_XCFRAMEWORK_SLICES=host — macOS arm64 slice only. Used by
+#       the docs smoke (e2e/docs/exercise-swift.sh), which runs
+#       `swift test` on the macOS host and never links the iOS
+#       slices. Skipping the three iOS cross-compiles + lipo halves
+#       the cargo wall clock on a cold cache.
+#
 # Required: rustup with the listed targets installed, and Xcode
 # command-line tools (for `xcodebuild -create-xcframework` + `lipo`).
 #
 set -euo pipefail
+
+SLICES="${AMBA_XCFRAMEWORK_SLICES:-all}"
+case "$SLICES" in
+    all|host) ;;
+    *)
+        echo "error: AMBA_XCFRAMEWORK_SLICES must be 'all' or 'host' (got '$SLICES')" >&2
+        exit 1
+        ;;
+esac
 
 cd "$(dirname "$0")"
 SWIFT_DIR="$(pwd)"
@@ -40,13 +57,18 @@ if [ ! -d "$CORE_DIR" ]; then
 fi
 
 # Ensure rustup targets are present. `rustup target add` is
-# idempotent — re-running is cheap.
-echo "==> ensuring rustup targets installed"
-rustup target add \
-    aarch64-apple-ios \
-    aarch64-apple-ios-sim \
-    aarch64-apple-darwin \
-    x86_64-apple-ios
+# idempotent — re-running is cheap. host mode only needs the macOS
+# slice's target.
+echo "==> ensuring rustup targets installed (slices: $SLICES)"
+if [ "$SLICES" = "host" ]; then
+    rustup target add aarch64-apple-darwin
+else
+    rustup target add \
+        aarch64-apple-ios \
+        aarch64-apple-ios-sim \
+        aarch64-apple-darwin \
+        x86_64-apple-ios
+fi
 
 # Step 1 — host build. Produces the .dylib that uniffi-bindgen
 # introspects for the Swift binding generation. We also need the
@@ -86,15 +108,18 @@ for f in AmbaCoreFFI.h AmbaCoreFFI.modulemap AmbaCore.swift; do
     fi
 done
 
-# Step 3 — cross-compile the four slices.
-echo "==> building core for iOS device (arm64)"
-(cd "$CORE_DIR" && cargo build --release --target aarch64-apple-ios --features uniffi-surface)
+# Step 3 — cross-compile the slices. host mode builds only the macOS
+# slice; the three iOS slices (device + 2 simulators) are skipped.
+if [ "$SLICES" = "all" ]; then
+    echo "==> building core for iOS device (arm64)"
+    (cd "$CORE_DIR" && cargo build --release --target aarch64-apple-ios --features uniffi-surface)
 
-echo "==> building core for iOS Simulator (arm64)"
-(cd "$CORE_DIR" && cargo build --release --target aarch64-apple-ios-sim --features uniffi-surface)
+    echo "==> building core for iOS Simulator (arm64)"
+    (cd "$CORE_DIR" && cargo build --release --target aarch64-apple-ios-sim --features uniffi-surface)
 
-echo "==> building core for iOS Simulator (x86_64)"
-(cd "$CORE_DIR" && cargo build --release --target x86_64-apple-ios --features uniffi-surface)
+    echo "==> building core for iOS Simulator (x86_64)"
+    (cd "$CORE_DIR" && cargo build --release --target x86_64-apple-ios --features uniffi-surface)
+fi
 
 echo "==> building core for macOS (arm64)"
 (cd "$CORE_DIR" && cargo build --release --target aarch64-apple-darwin --features uniffi-surface)
@@ -116,24 +141,35 @@ echo "==> staged headers from $GENERATED_DIR"
 # can only hold one slice per SDK, so Apple-Silicon and Intel
 # simulator builds must be lipo'd together before the xcframework
 # assembly. The device and macOS slices are single-arch and don't need
-# this step.
-echo "==> creating fat iOS Simulator slice (arm64 + x86_64)"
-lipo -create \
-    "$TARGET_DIR/aarch64-apple-ios-sim/release/libamba_core.a" \
-    "$TARGET_DIR/x86_64-apple-ios/release/libamba_core.a" \
-    -output "$SIM_FAT_DIR/libamba_core.a"
+# this step. host mode has no simulator slices to fold.
+if [ "$SLICES" = "all" ]; then
+    echo "==> creating fat iOS Simulator slice (arm64 + x86_64)"
+    lipo -create \
+        "$TARGET_DIR/aarch64-apple-ios-sim/release/libamba_core.a" \
+        "$TARGET_DIR/x86_64-apple-ios/release/libamba_core.a" \
+        -output "$SIM_FAT_DIR/libamba_core.a"
+fi
 
-# Step 6 — assemble the xcframework.
+# Step 6 — assemble the xcframework. host mode emits a macOS-only
+# xcframework — enough for `swift build` / `swift test` on the host;
+# anything targeting iOS needs the default all-slices build.
 rm -rf "$SWIFT_DIR/Frameworks/AmbaCoreFFI.xcframework"
 
-xcodebuild -create-xcframework \
-    -library "$TARGET_DIR/aarch64-apple-ios/release/libamba_core.a" \
-    -headers "$HEADERS_TMP" \
-    -library "$SIM_FAT_DIR/libamba_core.a" \
-    -headers "$HEADERS_TMP" \
-    -library "$TARGET_DIR/aarch64-apple-darwin/release/libamba_core.a" \
-    -headers "$HEADERS_TMP" \
-    -output "$SWIFT_DIR/Frameworks/AmbaCoreFFI.xcframework"
+if [ "$SLICES" = "all" ]; then
+    xcodebuild -create-xcframework \
+        -library "$TARGET_DIR/aarch64-apple-ios/release/libamba_core.a" \
+        -headers "$HEADERS_TMP" \
+        -library "$SIM_FAT_DIR/libamba_core.a" \
+        -headers "$HEADERS_TMP" \
+        -library "$TARGET_DIR/aarch64-apple-darwin/release/libamba_core.a" \
+        -headers "$HEADERS_TMP" \
+        -output "$SWIFT_DIR/Frameworks/AmbaCoreFFI.xcframework"
+else
+    xcodebuild -create-xcframework \
+        -library "$TARGET_DIR/aarch64-apple-darwin/release/libamba_core.a" \
+        -headers "$HEADERS_TMP" \
+        -output "$SWIFT_DIR/Frameworks/AmbaCoreFFI.xcframework"
+fi
 
 echo
 echo "done. xcframework slices:"
