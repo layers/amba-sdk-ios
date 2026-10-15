@@ -1699,10 +1699,12 @@ final class AmbaNewNamespaceTests: XCTestCase {
         XCTAssertEqual(items[0].sku, "sword")
 
         mock.nextInventoryPurchaseJson = #"""
-        {"id":"i2","catalog_item_id":"c2","sku":"shield","quantity":1,"acquired_at":"2026-05-12T00:00:00Z","metadata":{}}
+        {"purchased":true,"currency_code":"coins","price":200,"balance_after":300}
         """#
         let purchased = try await client.inventory.purchase(PurchaseRequest(sku: "shield"))
-        XCTAssertEqual(purchased.sku, "shield")
+        XCTAssertTrue(purchased.purchased)
+        XCTAssertEqual(purchased.currencyCode, "coins")
+        XCTAssertEqual(purchased.balanceAfter, 300)
         let sent = mock.inventoryPurchaseCalls[0]
         XCTAssertTrue(sent.contains("\"sku\":\"shield\""))
     }

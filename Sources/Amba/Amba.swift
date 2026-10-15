@@ -753,11 +753,11 @@ public final class AmbaClient {
             let json = try await core.inventoryGetItem(id: id)
             return try Amba.decodeJSON(InventoryItem.self, from: json)
         }
-        public func purchase(_ request: PurchaseRequest) async throws -> InventoryItem {
+        public func purchase(_ request: PurchaseRequest) async throws -> InventoryPurchase {
             let data = try JSONEncoder.amba.encode(request)
             let requestJson = String(data: data, encoding: .utf8) ?? "{}"
             let json = try await core.inventoryPurchase(requestJson: requestJson)
-            return try Amba.decodeJSON(InventoryItem.self, from: json)
+            return try Amba.decodeJSON(InventoryPurchase.self, from: json)
         }
         public func consume(_ request: ConsumeRequest) async throws -> InventoryItem {
             let data = try JSONEncoder.amba.encode(request)
@@ -1643,7 +1643,7 @@ public enum Amba {
         public static func item(id: String) async throws -> InventoryItem {
             try await Amba.requireClient().inventory.item(id: id)
         }
-        public static func purchase(_ request: PurchaseRequest) async throws -> InventoryItem {
+        public static func purchase(_ request: PurchaseRequest) async throws -> InventoryPurchase {
             try await Amba.requireClient().inventory.purchase(request)
         }
         public static func consume(_ request: ConsumeRequest) async throws -> InventoryItem {
@@ -2219,7 +2219,7 @@ extension JSONEncoder {
     }()
 }
 
-public let SDK_VERSION = "4.1.1"
+public let SDK_VERSION = "4.1.2"
 
 // MARK: - SDK 4.0 NEW types (sessions / sync / leagues / storage / collections)
 
@@ -2599,6 +2599,22 @@ public struct InventoryItem: Codable, Equatable {
         lhs.id == rhs.id && lhs.catalogItemId == rhs.catalogItemId &&
             lhs.sku == rhs.sku && lhs.quantity == rhs.quantity &&
             lhs.acquiredAt == rhs.acquiredAt
+    }
+}
+
+/// What `inventory.purchase` returns: the purchase went through, the currency
+/// charged, the price paid and the user's balance in that currency afterwards.
+/// The bought item is in the user's inventory; read it with `inventory.items()`.
+public struct InventoryPurchase: Codable, Equatable {
+    public let purchased: Bool
+    public let currencyCode: String
+    public let price: Int
+    public let balanceAfter: Int
+
+    enum CodingKeys: String, CodingKey {
+        case purchased, price
+        case currencyCode = "currency_code"
+        case balanceAfter = "balance_after"
     }
 }
 
@@ -3204,7 +3220,8 @@ public struct ReferralCode: Codable, Equatable {
 public struct ReferralClaim: Codable, Equatable {
     public let id: String
     public let codeId: String
-    public let referrerId: String
+    /// The user who owns the claimed code; nil for a code no user owns.
+    public let referrerId: String?
     public let refereeId: String
     public let reward: AnyDecodable?
     public let claimedAt: Date
