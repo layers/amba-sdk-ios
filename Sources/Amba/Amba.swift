@@ -2219,7 +2219,7 @@ extension JSONEncoder {
     }()
 }
 
-public let SDK_VERSION = "4.1.2"
+public let SDK_VERSION = "4.1.3"
 
 // MARK: - SDK 4.0 NEW types (sessions / sync / leagues / storage / collections)
 
@@ -2620,6 +2620,8 @@ public struct InventoryPurchase: Codable, Equatable {
 
 public struct PurchaseRequest: Codable, Equatable {
     public let sku: String
+    /// A purchase buys one item: leave this `nil` or pass `1`. Any other value
+    /// is refused with `400 QUANTITY_NOT_SUPPORTED` before anything is charged.
     public let quantity: UInt32?
     public let currencyKey: String?
 
@@ -2912,18 +2914,27 @@ public enum FriendshipState: String, Codable, Equatable {
     case declined
 }
 
+/// A friendship from the signed-in user's side: `userId` is the user and
+/// `friendId` the other user. A pending row is incoming when `addresseeId`
+/// equals `userId` and outgoing when `requesterId` does.
 public struct Friendship: Codable, Equatable {
     public let id: String
     public let userId: String
     public let friendId: String
     public let state: FriendshipState
     public let createdAt: Date
+    /// Who sent the request.
+    public let requesterId: String?
+    /// Who the request was sent to.
+    public let addresseeId: String?
 
     enum CodingKeys: String, CodingKey {
         case id, state
         case userId = "user_id"
         case friendId = "friend_id"
         case createdAt = "created_at"
+        case requesterId = "requester_id"
+        case addresseeId = "addressee_id"
     }
 }
 
