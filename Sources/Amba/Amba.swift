@@ -2219,7 +2219,7 @@ extension JSONEncoder {
     }()
 }
 
-public let SDK_VERSION = "4.1.4"
+public let SDK_VERSION = "4.1.5"
 
 // MARK: - SDK 4.0 NEW types (sessions / sync / leagues / storage / collections)
 
