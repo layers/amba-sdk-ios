@@ -2219,7 +2219,7 @@ extension JSONEncoder {
     }()
 }
 
-public let SDK_VERSION = "4.1.3"
+public let SDK_VERSION = "4.1.4"
 
 // MARK: - SDK 4.0 NEW types (sessions / sync / leagues / storage / collections)
 
@@ -2624,16 +2624,24 @@ public struct PurchaseRequest: Codable, Equatable {
     /// is refused with `400 QUANTITY_NOT_SUPPORTED` before anything is charged.
     public let quantity: UInt32?
     public let currencyKey: String?
+    /// Buy through this store's listing: its override price, per-user limit
+    /// and segment apply. An item an active store limits per user is sold
+    /// only this way (`409 STORE_PURCHASE_REQUIRED` without it).
+    public let storeId: String?
 
-    public init(sku: String, quantity: UInt32? = nil, currencyKey: String? = nil) {
+    public init(
+        sku: String, quantity: UInt32? = nil, currencyKey: String? = nil, storeId: String? = nil
+    ) {
         self.sku = sku
         self.quantity = quantity
         self.currencyKey = currencyKey
+        self.storeId = storeId
     }
 
     enum CodingKeys: String, CodingKey {
         case sku, quantity
         case currencyKey = "currency_key"
+        case storeId = "store_id"
     }
 }
 

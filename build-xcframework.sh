@@ -30,8 +30,19 @@
 #       slices. Skipping the three iOS cross-compiles + lipo halves
 #       the cargo wall clock on a cold cache.
 #
-# Required: rustup with the listed targets installed, and Xcode
-# command-line tools (for `xcodebuild -create-xcframework` + `lipo`).
+# Required: rustup with the listed targets installed, Xcode command-line
+# tools (for `xcodebuild -create-xcframework` + `lipo`), and python3.
+#
+# Deployment targets:
+#   Each slice is built for the minimum iOS / macOS that
+#   Package.swift.template (the Package.swift SPM consumers get) declares in
+#   `platforms`, through IPHONEOS_DEPLOYMENT_TARGET / MACOSX_DEPLOYMENT_TARGET,
+#   which rustc and the `cc` crate (C and assembly files of dependencies
+#   such as ring) both read. Unset, rustc used its own minimum for each
+#   target (iOS 10.0 on devices, 14.0 on the arm64 simulator, macOS 11.0)
+#   and cc used the build machine's SDK version, so apps with a lower
+#   deployment target got "built for newer iOS version" linker warnings. After each slice is built,
+#   .github/scripts/check-apple-min-os.py checks every object in it.
 #
 set -euo pipefail
 
@@ -48,13 +59,45 @@ cd "$(dirname "$0")"
 SWIFT_DIR="$(pwd)"
 REPO_ROOT="$(cd .. && pwd)"
 CORE_DIR="$REPO_ROOT/core"
-TARGET_DIR="$REPO_ROOT/target"
+TARGET_DIR="${CARGO_TARGET_DIR:-$REPO_ROOT/target}"
 GENERATED_DIR="$SWIFT_DIR/Sources/Amba/Generated"
 
 if [ ! -d "$CORE_DIR" ]; then
     echo "error: expected $CORE_DIR — run from inside the amba-sdks monorepo" >&2
     exit 1
 fi
+CHECK_MIN_OS="$REPO_ROOT/../.github/scripts/check-apple-min-os.py"
+
+# Minimum OS version a Package.swift declares for a platform:
+# `.iOS(.v14)` -> 14.0, `.macOS(.v12)` -> 12.0, `.iOS(.v14_5)` -> 14.5.
+platform_minimum() {
+    sed -nE "s/^[[:space:]]*\.$2\(\.v([0-9]+)(_([0-9]+))?\),?[[:space:]]*$/\1.\3/p" "$1" \
+        | sed -E 's/\.$/.0/' | head -n 1
+}
+MIN_IOS="$(platform_minimum "$SWIFT_DIR/Package.swift.template" iOS)"
+MIN_MACOS="$(platform_minimum "$SWIFT_DIR/Package.swift.template" macOS)"
+for platform in iOS macOS; do
+    declared="$(platform_minimum "$SWIFT_DIR/Package.swift.template" "$platform")"
+    local_manifest="$(platform_minimum "$SWIFT_DIR/Package.swift" "$platform")"
+    if [ -z "$declared" ] || [ "$declared" != "$local_manifest" ]; then
+        echo "error: Package.swift.template declares $platform '${declared}' and Package.swift declares '${local_manifest}'; they must name the same minimum." >&2
+        exit 1
+    fi
+done
+echo "==> deployment targets from Package.swift.template: iOS $MIN_IOS, macOS $MIN_MACOS"
+
+# Builds one slice for its deployment target, then checks every object in
+# it. cargo does not rebuild a crate when a *_DEPLOYMENT_TARGET variable
+# changes, so the minimum also goes into RUSTFLAGS as a cfg nothing reads,
+# which cargo includes in every crate's fingerprint, so cargo rebuilds
+# objects left from a build for another minimum.
+build_slice() {
+    local target="$1" variable="$2" minimum="$3"
+    (cd "$CORE_DIR" && env "$variable=$minimum" \
+        RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }--cfg amba_apple_deployment_target=\"$minimum\"" \
+        cargo build --release --target "$target" --features uniffi-surface)
+    python3 "$CHECK_MIN_OS" "$TARGET_DIR/$target/release/libamba_core.a" "$target" "$minimum"
+}
 
 # Ensure rustup targets are present. `rustup target add` is
 # idempotent — re-running is cheap. host mode only needs the macOS
@@ -111,18 +154,18 @@ done
 # Step 3 — cross-compile the slices. host mode builds only the macOS
 # slice; the three iOS slices (device + 2 simulators) are skipped.
 if [ "$SLICES" = "all" ]; then
-    echo "==> building core for iOS device (arm64)"
-    (cd "$CORE_DIR" && cargo build --release --target aarch64-apple-ios --features uniffi-surface)
+    echo "==> building core for iOS device (arm64, iOS $MIN_IOS)"
+    build_slice aarch64-apple-ios IPHONEOS_DEPLOYMENT_TARGET "$MIN_IOS"
 
-    echo "==> building core for iOS Simulator (arm64)"
-    (cd "$CORE_DIR" && cargo build --release --target aarch64-apple-ios-sim --features uniffi-surface)
+    echo "==> building core for iOS Simulator (arm64, iOS $MIN_IOS)"
+    build_slice aarch64-apple-ios-sim IPHONEOS_DEPLOYMENT_TARGET "$MIN_IOS"
 
-    echo "==> building core for iOS Simulator (x86_64)"
-    (cd "$CORE_DIR" && cargo build --release --target x86_64-apple-ios --features uniffi-surface)
+    echo "==> building core for iOS Simulator (x86_64, iOS $MIN_IOS)"
+    build_slice x86_64-apple-ios IPHONEOS_DEPLOYMENT_TARGET "$MIN_IOS"
 fi
 
-echo "==> building core for macOS (arm64)"
-(cd "$CORE_DIR" && cargo build --release --target aarch64-apple-darwin --features uniffi-surface)
+echo "==> building core for macOS (arm64, macOS $MIN_MACOS)"
+build_slice aarch64-apple-darwin MACOSX_DEPLOYMENT_TARGET "$MIN_MACOS"
 
 # Step 4 — stage headers in a temp dir alongside the libraries.
 # xcodebuild -create-xcframework copies whatever lives in -headers

@@ -1707,6 +1707,17 @@ final class AmbaNewNamespaceTests: XCTestCase {
         XCTAssertEqual(purchased.balanceAfter, 300)
         let sent = mock.inventoryPurchaseCalls[0]
         XCTAssertTrue(sent.contains("\"sku\":\"shield\""))
+        XCTAssertFalse(sent.contains("store_id"))
+    }
+
+    func testInventoryPurchaseSendsStoreId() async throws {
+        mock.nextInventoryPurchaseJson = #"""
+        {"purchased":true,"currency_code":"coins","price":30,"balance_after":70}
+        """#
+        _ = try await client.inventory.purchase(
+            PurchaseRequest(sku: "shield", currencyKey: "coins", storeId: "store-1"))
+        let sent = mock.inventoryPurchaseCalls[0]
+        XCTAssertTrue(sent.contains("\"store_id\":\"store-1\""))
     }
 
     func testInventoryConsumeSerializesRequest() async throws {
